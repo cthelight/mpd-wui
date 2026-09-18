@@ -115,7 +115,13 @@ mod tests {
     #[test]
     fn embeds_expected_files() {
         let files: Vec<String> = Asset::iter().map(|p| p.into_owned()).collect();
-        for expected in ["index.html", "css/styles.css", "js/app.js", "js/api.js"] {
+        for expected in [
+            "index.html",
+            "css/styles.css",
+            "js/app.js",
+            "js/api.js",
+            "img/icon.svg",
+        ] {
             assert!(
                 files.iter().any(|f| f == expected),
                 "expected {expected} in embedded files: {files:?}"

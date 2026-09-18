@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="mpd-wui">
+  <defs>
+    <linearGradient id="mpdwui-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b212c"/>
+      <stop offset="1" stop-color="#0f1115"/>
+    </linearGradient>
+    <linearGradient id="mpdwui-bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4bd5e"/>
+      <stop offset="1" stop-color="#c9852b"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#mpdwui-bg)"/>
+  <g fill="url(#mpdwui-bar)">
+    <rect x="5.5" y="23" width="7" height="18" rx="3.5"/>
+    <rect x="17" y="15" width="7" height="34" rx="3.5"/>
+    <rect x="28.5" y="9" width="7" height="46" rx="3.5"/>
+    <rect x="40" y="19" width="7" height="26" rx="3.5"/>
+    <rect x="51.5" y="12" width="7" height="40" rx="3.5"/>
+  </g>
+</svg>

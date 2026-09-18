@@ -37,6 +37,7 @@ html, body {
 }
 
 .wordmark { font-weight: 600; letter-spacing: 0.02em; }
+.wordmark-icon { vertical-align: middle; margin-right: 8px; }
 
 .conn { width: 9px; height: 9px; border-radius: 50%; background: var(--err); }
 .conn.up { background: var(--ok); }
