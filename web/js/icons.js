@@ -18,6 +18,8 @@ const icons = {
     '<path d="M9 3h6l1 2h4v2H4V5h4l1-2zm-3 6h12l-1 12H7L6 9z" />',
   shuffle:
     '<path d="M17 3h4v4h-2V6.4l-4.3 4.3-1.4-1.4L17.6 5H17V3zM3 5h4.6l2.5 2.5-1.4 1.4L6.3 7H3V5zm10.2 5.1 1.4-1.4 1.9 1.9L14.6 12l1.4 1.4-1.9 1.9-1.4-1.4-2.5 2.5H3v-2h4.3l2.5-2.5 1.4 1.4z" />',
+  grip:
+    '<circle cx="9" cy="5.5" r="1.6" /><circle cx="15" cy="5.5" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18.5" r="1.6" /><circle cx="15" cy="18.5" r="1.6" />',
 };
 
 export function icon(name, size = 18) {
