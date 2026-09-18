@@ -77,7 +77,8 @@ function interpolatedElapsed() {
 }
 
 function renderView() {
-  mountedViews = mountedViews.filter((view) => view !== miniView);
+  // Keep the persistent mini-player; drop only the previously-mounted main view.
+  mountedViews = mountedViews.filter((view) => view === miniView);
   viewEl.innerHTML = "";
   if (state.view === "nowplaying") {
     const view = mountNowPlaying(viewEl, actions);

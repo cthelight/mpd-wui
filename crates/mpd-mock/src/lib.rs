@@ -154,25 +154,6 @@ async fn handle_conn(stream: TcpStream, state: Arc<Mutex<MockState>>) {
         if cmd.is_empty() {
             continue;
         }
-        if cmd == "command_list_start" {
-            // Consume commands until command_list_end, then reply once.
-            loop {
-                line.clear();
-                match reader.read_line(&mut line).await {
-                    Ok(0) | Err(_) => return,
-                    Ok(_) => {
-                        if line.trim() == "command_list_end" {
-                            break;
-                        }
-                    }
-                }
-            }
-            if w.write_all(b"OK\n").await.is_err() {
-                return;
-            }
-            let _ = w.flush().await;
-            continue;
-        }
         if handle_cmd(&cmd, &mut w, &state).await.is_err() {
             return;
         }
@@ -282,6 +263,14 @@ async fn handle_cmd(
                         .await?;
                 }
             }
+        }
+        // MPD 0.22 removed the command_list_* commands; a real server
+        // answers them with an "unknown command" ACK.
+        "command_list_start" | "command_list_end" => {
+            w.write_all(
+                format!("ACK [5@0] {{}} unknown command \"{name}\"\n").as_bytes(),
+            )
+            .await?;
         }
         // play, pause, stop, next, previous, seekcur, setvol, random, repeat,
         // single, consume, add, searchadd, findadd, clear, deleteid, moveid,

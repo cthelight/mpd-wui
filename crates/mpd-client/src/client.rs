@@ -34,8 +34,8 @@ impl MpdConfig {
 
 /// A single request routed through the serialized command connection.
 struct Request {
-    /// The exact protocol command text to write (may be multi-line for
-    /// `command_list_*`). A trailing newline is appended by the sender.
+    /// The exact protocol command text to write (always a single line).
+    /// A trailing newline is appended by the sender.
     cmd: String,
     reply: oneshot::Sender<Result<String, String>>,
 }
@@ -248,11 +248,21 @@ impl MpdClient {
         if let Some(v) = consume {
             cmds.push(format!("consume {}", u32::from(v)));
         }
-        if cmds.is_empty() {
-            return Ok(());
+        // Sent as individual commands: `command_list_*` was removed in
+        // MPD 0.22, and a desynchronized reply stream corrupts the
+        // cached snapshot (e.g. "Nothing playing" while a song plays).
+        if let Some(v) = random {
+            self.cmd(&format!("random {}", u32::from(v))).await?;
         }
-        let cmd = format!("command_list_start\n{}\ncommand_list_end", cmds.join("\n"));
-        self.send_raw(&cmd).await?;
+        if let Some(v) = repeat {
+            self.cmd(&format!("repeat {}", u32::from(v))).await?;
+        }
+        if let Some(v) = single {
+            self.cmd(&format!("single {}", u32::from(v))).await?;
+        }
+        if let Some(v) = consume {
+            self.cmd(&format!("consume {}", u32::from(v))).await?;
+        }
         Ok(())
     }
 
@@ -285,12 +295,11 @@ impl MpdClient {
     }
 
     pub async fn delete_ids(&self, ids: &[u32]) -> anyhow::Result<()> {
-        if ids.is_empty() {
-            return Ok(());
+        // Individual `deleteid` commands: `command_list_*` was removed in
+        // MPD 0.22 (see `set_options`).
+        for id in ids {
+            self.cmd(&format!("deleteid {id}")).await?;
         }
-        let body: String = ids.iter().map(|i| format!("deleteid {i}\n")).collect();
-        let cmd = format!("command_list_start\n{body}command_list_end");
-        self.send_raw(&cmd).await?;
         Ok(())
     }
 
@@ -380,6 +389,15 @@ impl MpdClient {
 
     pub fn snapshot(&self) -> Snapshot {
         self.snap_rx.borrow().clone()
+    }
+
+    /// A fresh snapshot fetched over the command connection, as opposed to
+    /// `snapshot()` which returns the last cached value (stale between
+    /// `changed:` events, e.g. `elapsed` during continuous playback).
+    pub async fn fresh_snapshot(&self) -> anyhow::Result<Snapshot> {
+        let status = self.status().await?;
+        let song = self.currentsong().await?;
+        Ok(Snapshot { status, song })
     }
 
     pub fn events(&self) -> broadcast::Receiver<MpdEvent> {

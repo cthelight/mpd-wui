@@ -16,7 +16,15 @@ pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut events = state.client.events();
 
-    let initial = state.client.snapshot();
+    // Fetch a fresh snapshot for the initial message: the cached
+    // `snapshot()` is stale between `changed:` events (e.g. `elapsed`
+    // during playback), which made the first WS message revert the UI
+    // to an older state right after a fresh `GET /status` painted it.
+    let initial = state
+        .client
+        .fresh_snapshot()
+        .await
+        .unwrap_or_else(|_| state.client.snapshot());
     if let Some(message) = encode_snapshot(&initial) {
         if send(&mut socket, message).await.is_err() {
             return;
