@@ -400,6 +400,21 @@ impl MpdClient {
         Ok(Snapshot { status, song })
     }
 
+    /// Fetch a fresh snapshot and broadcast it to event subscribers.
+    ///
+    /// MPD only delivers `changed:` idle notifications to an idle connection
+    /// that is awaiting an `idle` response at the moment the change happens.
+    /// The idle connection is not idle while it fetches the snapshot for a
+    /// previous change, so a change made in that window is never announced
+    /// (and the earlier, stale snapshot may even overwrite the UI afterwards).
+    /// Mutating commands therefore push their own post-command snapshot so
+    /// subscribers (the WebSocket) always observe the new state.
+    pub async fn refresh(&self) -> anyhow::Result<()> {
+        let snapshot = self.fresh_snapshot().await?;
+        let _ = self.events.send(MpdEvent::Snapshot(Box::new(snapshot)));
+        Ok(())
+    }
+
     pub fn events(&self) -> broadcast::Receiver<MpdEvent> {
         self.events.subscribe()
     }

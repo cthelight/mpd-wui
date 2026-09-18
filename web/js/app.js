@@ -47,8 +47,13 @@ const actions = {
   toggleOption(key) {
     if (!state.snapshot) return;
     const next = !state.snapshot.status[key];
-    post("/options", { [key]: next }).catch(() => {});
     state.snapshot.status[key] = next;
+    renderSnapshot();
+    post("/options", { [key]: next }).catch(() => {
+      // The command failed: re-sync with the server instead of keeping
+      // a state MPD never applied.
+      get("/status").then(setSnapshot).catch(() => {});
+    });
   },
 };
 
@@ -61,10 +66,15 @@ function setConn(up) {
   connEl?.classList.toggle("up", up);
 }
 
+function renderSnapshot() {
+  if (!state.snapshot) return;
+  mountedViews.forEach((view) => view.update(state.snapshot));
+}
+
 function setSnapshot(snapshot) {
   state.snapshot = snapshot;
   state.lastSync = performance.now();
-  mountedViews.forEach((view) => view.update(snapshot));
+  renderSnapshot();
 }
 
 function interpolatedElapsed() {

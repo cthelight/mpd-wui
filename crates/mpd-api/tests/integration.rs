@@ -5,7 +5,7 @@ use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
 use mpd_api::{router, spawn_cache_invalidation, AppState};
-use mpd_client::{MpdClient, MpdConfig};
+use mpd_client::{MpdClient, MpdConfig, MpdEvent};
 use mpd_mock::{MockMpd, MockState};
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -297,6 +297,55 @@ async fn playback_endpoints_succeed() {
         let (status, _, _) = call(&router, post_json(uri, &body)).await;
         assert_eq!(status, StatusCode::NO_CONTENT, "expected 204 for {uri}");
     }
+}
+
+/// The mock never emits `changed: options` in response to an option command,
+/// simulating MPD's idle notification being lost (which happens when the idle
+/// connection is busy fetching a snapshot for a previous change). The route
+/// must push its own post-command snapshot so the WebSocket still reflects
+/// the new option state.
+#[tokio::test]
+async fn options_change_pushes_snapshot_without_idle_notification() {
+    let initial = MockState {
+        status: fields(&[("state", "stop"), ("single", "0"), ("volume", "42")]),
+        ..Default::default()
+    };
+    let (router, state, mock) = app_with(initial).await;
+    let mut events = state.client.events();
+
+    // Wait until the command connection has primed its snapshot (the
+    // distinctive volume marks that), so the stream state is deterministic.
+    for _ in 0..200 {
+        if state.client.snapshot().status.volume == 42 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(state.client.snapshot().status.volume, 42, "client must connect");
+
+    // Simulate MPD applying `single 1` (a real server applies it before the
+    // next `status` read on the serialized command connection).
+    mock
+        .set_status(fields(&[("state", "stop"), ("single", "1"), ("volume", "42")]))
+        .await;
+
+    let (status, _, _) = call(&router, post_json("/api/options", &json!({"single": true}))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let mut found = false;
+    for _ in 0..400 {
+        match tokio::time::timeout(Duration::from_millis(50), events.recv()).await {
+            Ok(Ok(MpdEvent::Snapshot(snapshot))) => {
+                if snapshot.status.single {
+                    found = true;
+                    break;
+                }
+            }
+            Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            Err(_) | Ok(Err(_)) => break,
+        }
+    }
+    assert!(found, "expected a snapshot carrying single: true");
 }
 
 #[tokio::test]
