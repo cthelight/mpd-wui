@@ -77,6 +77,7 @@ function hitData(hit) {
       title: hit.name,
       subtitle: `${hit.count} tracks`,
       drill: true,
+      target: { artist: hit.name },
       nav: { type: "artist", key: hit.key, name: hit.name },
     };
   }
@@ -87,6 +88,7 @@ function hitData(hit) {
       title: hit.name,
       subtitle: [hit.artist, `${hit.count} tracks`].filter(Boolean).join(" — "),
       drill: true,
+      target: { album: hit.name },
       nav: { type: "album", album: hit.name, albumartist: hit.artist ?? null },
     };
   }
@@ -169,6 +171,10 @@ function setMessage(list, store, message, className = "empty") {
 }
 
 async function queueTarget(target, play, button) {
+  if (!target) {
+    toast("Nothing to queue");
+    return;
+  }
   const original = button.innerHTML;
   button.disabled = true;
   try {
