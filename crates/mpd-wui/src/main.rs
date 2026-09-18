@@ -8,11 +8,13 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use anyhow::Context;
-use axum::extract::Request;
+use axum::Router;
+use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use mpd_api::{AppState, router, spawn_cache_invalidation};
 use mpd_client::{MpdClient, MpdConfig};
+use mpd_web::WebConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,6 +41,10 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .context("CACHE_TTL must be a whole number of seconds")?;
 
+    // Display name for the wordmark and tab title. Defaults to the MPD host
+    // (no port) so the tab identifies which server is being controlled.
+    let app_title = env::var("APP_TITLE").unwrap_or_else(|_| format!("MPD: {mpd_host}"));
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -52,7 +58,11 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(client, Duration::from_secs(cache_ttl));
     spawn_cache_invalidation(state.clone());
 
-    let app = router(state).fallback(fallback);
+    // The API router and the static-frontend fallback carry different state,
+    // so the fallback gets its own state and is merged in (only it has a
+    // fallback, so the merged router keeps the static handler as its own).
+    let web_config = WebConfig { title: app_title };
+    let app = router(state).merge(Router::new().fallback(fallback).with_state(web_config));
     let addr = SocketAddr::from((bind_addr, port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "serving MPD web UI");
@@ -69,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
 /// Static assets for the frontend; unknown `/api/` paths get a JSON 404
 /// instead of the index.html fallback (the SPA would swallow them silently).
-async fn fallback(req: Request) -> Response {
+async fn fallback(State(config): State<WebConfig>, req: Request) -> Response {
     if req.uri().path().starts_with("/api/") {
         return (
             StatusCode::NOT_FOUND,
@@ -78,5 +88,5 @@ async fn fallback(req: Request) -> Response {
         )
             .into_response();
     }
-    mpd_web::static_handler(req).await
+    mpd_web::static_handler(&config.title, req).await
 }

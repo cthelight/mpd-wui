@@ -19,9 +19,17 @@ use rust_embed::RustEmbed;
 #[folder = "../../web"]
 struct Asset;
 
+/// Frontend configuration held as axum state. `title` replaces the
+/// `__MPD_WUI_TITLE__` placeholder in `index.html` on every response, so the
+/// tab title, the `app-title` meta tag and the wordmark all share one value.
+#[derive(Clone)]
+pub struct WebConfig {
+    pub title: String,
+}
+
 /// Serve a static asset from the embedded frontend, falling back to
 /// `index.html` for unknown paths so the app works without a web server.
-pub async fn static_handler(req: Request) -> Response {
+pub async fn static_handler(title: &str, req: Request) -> Response {
     let path = req.uri().path();
     let file_path = path.trim_start_matches('/');
     let file_path = if file_path.is_empty() {
@@ -31,9 +39,9 @@ pub async fn static_handler(req: Request) -> Response {
     };
 
     match Asset::get(file_path) {
-        Some(file) => serve(file, file_path),
+        Some(file) => serve(file, file_path, title),
         None => match Asset::get("index.html") {
-            Some(file) => serve(file, "index.html"),
+            Some(file) => serve(file, "index.html", title),
             None => (StatusCode::INTERNAL_SERVER_ERROR, "index.html missing").into_response(),
         },
     }
@@ -47,14 +55,45 @@ pub async fn static_handler(req: Request) -> Response {
 static ASSET_BYTES: LazyLock<Mutex<HashMap<String, Bytes>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn serve(file: rust_embed::EmbeddedFile, path: &str) -> Response {
+fn serve(file: rust_embed::EmbeddedFile, path: &str, title: &str) -> Response {
     let data = asset_bytes(&file, path);
+    // Only the shell is templated; other assets are served verbatim.
+    let data = if path == "index.html" {
+        apply_title(&data, title).into()
+    } else {
+        data
+    };
     let headers: [(HeaderName, &str); 3] = [
         (header::CONTENT_TYPE, mime_for(path)),
         (header::CACHE_CONTROL, cache_for(path)),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
     ];
     (StatusCode::OK, headers, data).into_response()
+}
+
+/// The token the shell uses where the display name belongs.
+const TITLE_PLACEHOLDER: &str = "__MPD_WUI_TITLE__";
+
+/// Replace every `TITLE_PLACEHOLDER` in the shell with the configured title.
+fn apply_title(html: &Bytes, title: &str) -> String {
+    let text = std::str::from_utf8(html).unwrap_or("");
+    text.replace(TITLE_PLACEHOLDER, &html_escape(title))
+}
+
+/// Escape the characters that are meaningful in HTML text or a double-quoted
+/// attribute value (the title is emitted in both).
+fn html_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn asset_bytes(file: &rust_embed::EmbeddedFile, path: &str) -> Bytes {
@@ -143,5 +182,20 @@ mod tests {
     fn cache_for_is_stricter_for_shell() {
         assert_eq!(cache_for("index.html"), "no-cache");
         assert_eq!(cache_for("css/styles.css"), "public, max-age=600");
+    }
+
+    #[test]
+    fn html_escape_escapes_special_characters() {
+        assert_eq!(html_escape("a&b<c>d\"e"), "a&amp;b&lt;c&gt;d&quot;e");
+        assert_eq!(html_escape("plain"), "plain");
+    }
+
+    #[test]
+    fn apply_title_replaces_all_placeholders() {
+        let html = Bytes::from("<title>__MPD_WUI_TITLE__</title>x__MPD_WUI_TITLE__");
+        assert_eq!(
+            apply_title(&html, "MPD: host"),
+            "<title>MPD: host</title>xMPD: host"
+        );
     }
 }

@@ -133,7 +133,7 @@ function setSnapshot(snapshot) {
   renderSnapshot();
   const song = snapshot?.song;
   const name = song?.title || (song?.file ? song.file.split("/").pop() : "");
-  document.title = name ? `${name} · mpd-wui` : "mpd-wui";
+  document.title = name ? `${name} · ${config.appTitle}` : config.appTitle;
 }
 
 function interpolatedElapsed() {
