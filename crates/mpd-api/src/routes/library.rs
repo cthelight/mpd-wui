@@ -26,7 +26,9 @@ pub async fn browse(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Browse>, ApiError> {
     let path = params.get("path").map(String::as_str).unwrap_or("");
-    Ok(Json(state.client.lsinfo(normalize_browse_path(path)).await?))
+    Ok(Json(
+        state.client.lsinfo(normalize_browse_path(path)).await?,
+    ))
 }
 
 /// MPD treats a leading `/` as an absolute filesystem path (which it rejects

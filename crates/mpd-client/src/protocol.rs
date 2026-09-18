@@ -534,7 +534,10 @@ mod tests {
             vec!["X".to_string(), "Y".to_string()]
         );
         let raw2 = "Genre: Jazz\nOK\n";
-        assert_eq!(parse_list(&parse_text(raw2), "genre"), vec!["Jazz".to_string()]);
+        assert_eq!(
+            parse_list(&parse_text(raw2), "genre"),
+            vec!["Jazz".to_string()]
+        );
     }
 
     #[test]
@@ -627,8 +630,14 @@ mod tests {
         assert_eq!(b.directories[0].songcount, None);
         assert_eq!(b.directories[0].playtime, None);
         assert_eq!(b.files.len(), 1);
-        assert_eq!(b.songcount, None, "total songs unknown when dirs lack counts");
-        assert_eq!(b.playtime, None, "total playtime unknown when dirs lack counts");
+        assert_eq!(
+            b.songcount, None,
+            "total songs unknown when dirs lack counts"
+        );
+        assert_eq!(
+            b.playtime, None,
+            "total playtime unknown when dirs lack counts"
+        );
     }
 
     #[test]
@@ -672,7 +681,10 @@ mod tests {
             "((Artist contains 'A') AND (Album contains 'B'))"
         );
         // Empty values are skipped entirely.
-        assert_eq!(build_search_filters(&[("Artist", ""), ("Album", "")], "=="), "");
+        assert_eq!(
+            build_search_filters(&[("Artist", ""), ("Album", "")], "=="),
+            ""
+        );
     }
 
     #[test]

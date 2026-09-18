@@ -267,10 +267,8 @@ async fn handle_cmd(
         // MPD 0.22 removed the command_list_* commands; a real server
         // answers them with an "unknown command" ACK.
         "command_list_start" | "command_list_end" => {
-            w.write_all(
-                format!("ACK [5@0] {{}} unknown command \"{name}\"\n").as_bytes(),
-            )
-            .await?;
+            w.write_all(format!("ACK [5@0] {{}} unknown command \"{name}\"\n").as_bytes())
+                .await?;
         }
         // play, pause, stop, next, previous, seekcur, setvol, random, repeat,
         // single, consume, add, searchadd, findadd, clear, deleteid, moveid,

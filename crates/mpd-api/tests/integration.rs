@@ -114,9 +114,18 @@ async fn status_returns_snapshot() {
     assert_eq!(value["status"]["state"], "play");
     assert_eq!(value["status"]["volume"], 70);
     assert_eq!(value["status"]["playlist_version"], 3);
-    assert_eq!(value["status"]["songs"], 4, "playlistlength must map to songs");
-    assert_eq!(value["status"]["crossfade"], 2, "xfade must map to crossfade");
-    assert_eq!(value["status"]["time"], 220, "time must be the total after the colon");
+    assert_eq!(
+        value["status"]["songs"], 4,
+        "playlistlength must map to songs"
+    );
+    assert_eq!(
+        value["status"]["crossfade"], 2,
+        "xfade must map to crossfade"
+    );
+    assert_eq!(
+        value["status"]["time"], 220,
+        "time must be the total after the colon"
+    );
     assert_eq!(value["song"]["file"], "a/one.flac");
     assert_eq!(value["song"]["artist"], "A");
 }
@@ -321,13 +330,20 @@ async fn options_change_pushes_snapshot_without_idle_notification() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(state.client.snapshot().status.volume, 42, "client must connect");
+    assert_eq!(
+        state.client.snapshot().status.volume,
+        42,
+        "client must connect"
+    );
 
     // Simulate MPD applying `single 1` (a real server applies it before the
     // next `status` read on the serialized command connection).
-    mock
-        .set_status(fields(&[("state", "stop"), ("single", "1"), ("volume", "42")]))
-        .await;
+    mock.set_status(fields(&[
+        ("state", "stop"),
+        ("single", "1"),
+        ("volume", "42"),
+    ]))
+    .await;
 
     let (status, _, _) = call(&router, post_json("/api/options", &json!({"single": true}))).await;
     assert_eq!(status, StatusCode::NO_CONTENT);

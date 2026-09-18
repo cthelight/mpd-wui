@@ -82,9 +82,11 @@ impl Query {
             .filter(|q| !q.is_empty())
             .map(|q| q.to_ascii_lowercase())
         {
-            let hit = FREE_TEXT_FIELDS
-                .iter()
-                .any(|f| f.value(song).map(|v| v.to_ascii_lowercase().contains(&needle)).unwrap_or(false));
+            let hit = FREE_TEXT_FIELDS.iter().any(|f| {
+                f.value(song)
+                    .map(|v| v.to_ascii_lowercase().contains(&needle))
+                    .unwrap_or(false)
+            });
             if !hit {
                 return false;
             }
@@ -128,7 +130,12 @@ mod tests {
         vec![
             song("alpha/one.flac", Some("Alpha"), Some("One"), Some("Jazz")),
             song("beta/two.flac", Some("Beta"), Some("Two"), Some("Rock")),
-            song("gamma/blue.flac", Some("Gamma"), Some("Blue Album"), Some("Folk")),
+            song(
+                "gamma/blue.flac",
+                Some("Gamma"),
+                Some("Blue Album"),
+                Some("Folk"),
+            ),
         ]
     }
 
@@ -136,19 +143,69 @@ mod tests {
     fn free_text_matches_any_field_case_insensitive() {
         let lib = library();
         // Matches the artist "Beta".
-        assert_eq!(filter(&lib, &Query { free_text: Some("beta".into()), exact: vec![] }).len(), 1);
+        assert_eq!(
+            filter(
+                &lib,
+                &Query {
+                    free_text: Some("beta".into()),
+                    exact: vec![]
+                }
+            )
+            .len(),
+            1
+        );
         // Matches the title "One" even though the query is uppercase.
-        assert_eq!(filter(&lib, &Query { free_text: Some("ONE".into()), exact: vec![] }).len(), 1);
+        assert_eq!(
+            filter(
+                &lib,
+                &Query {
+                    free_text: Some("ONE".into()),
+                    exact: vec![]
+                }
+            )
+            .len(),
+            1
+        );
         // Matches a genre.
-        assert_eq!(filter(&lib, &Query { free_text: Some("folK".into()), exact: vec![] }).len(), 1);
+        assert_eq!(
+            filter(
+                &lib,
+                &Query {
+                    free_text: Some("folK".into()),
+                    exact: vec![]
+                }
+            )
+            .len(),
+            1
+        );
         // Matches the file path.
-        assert_eq!(filter(&lib, &Query { free_text: Some("blue.flac".into()), exact: vec![] }).len(), 1);
+        assert_eq!(
+            filter(
+                &lib,
+                &Query {
+                    free_text: Some("blue.flac".into()),
+                    exact: vec![]
+                }
+            )
+            .len(),
+            1
+        );
     }
 
     #[test]
     fn free_text_no_match() {
         let lib = library();
-        assert_eq!(filter(&lib, &Query { free_text: Some("zzz".into()), exact: vec![] }).len(), 0);
+        assert_eq!(
+            filter(
+                &lib,
+                &Query {
+                    free_text: Some("zzz".into()),
+                    exact: vec![]
+                }
+            )
+            .len(),
+            0
+        );
     }
 
     #[test]
@@ -199,7 +256,14 @@ mod tests {
         let lib = library();
         assert_eq!(filter(&lib, &Query::default()).len(), 0);
         assert_eq!(
-            filter(&lib, &Query { free_text: Some("   ".into()), exact: vec![] }).len(),
+            filter(
+                &lib,
+                &Query {
+                    free_text: Some("   ".into()),
+                    exact: vec![]
+                }
+            )
+            .len(),
             0
         );
     }
