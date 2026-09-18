@@ -403,8 +403,15 @@ export function mountLibrary(container) {
   showMode();
   loadBrowse();
 
+  function refresh() {
+    if (!searchPane.hidden) onSearchInput();
+    else if (activeMode === "browse") loadBrowse();
+    else loadCollection();
+  }
+
   return {
     update() {},
     progress() {},
+    refresh,
   };
 }

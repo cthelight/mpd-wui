@@ -194,5 +194,6 @@ export function mountQueue(container, state) {
       }
     },
     progress() {},
+    refresh,
   };
 }

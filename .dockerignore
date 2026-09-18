@@ -1,5 +1,7 @@
 target/
 .git/
+.vscode/
+.idea/
 PLAN.md
 *.swp
 .DS_Store

@@ -120,7 +120,7 @@ function connect() {
     } else if (message.type === "reconnected") {
       setConn(true);
     } else if (message.type === "database-changed") {
-      // Queue/library refresh hooks will use this in later phases.
+      mountedViews.forEach((view) => view.refresh?.());
     }
   };
   ws.onclose = () => {
@@ -143,6 +143,65 @@ async function loadInitial() {
 
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => setView(button.dataset.view));
+});
+
+function isFormTarget(target) {
+  return target?.closest?.("input, textarea, select, [contenteditable='true']");
+}
+
+function seekBy(delta) {
+  const status = state.snapshot?.status;
+  if (!status?.time) return;
+  const elapsed = (status.elapsed || 0) + delta;
+  actions.seek(Math.min(status.time, Math.max(0, elapsed)));
+}
+
+function adjustVolume(delta) {
+  const current = state.snapshot?.status?.volume ?? 0;
+  actions.volume(Math.min(100, Math.max(0, current + delta)));
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (isFormTarget(event.target)) return;
+  switch (event.key) {
+    case " ":
+      event.preventDefault();
+      actions.playPause();
+      break;
+    case "ArrowLeft":
+      event.preventDefault();
+      seekBy(-10);
+      break;
+    case "ArrowRight":
+      event.preventDefault();
+      seekBy(10);
+      break;
+    case "ArrowUp":
+      event.preventDefault();
+      adjustVolume(5);
+      break;
+    case "ArrowDown":
+      event.preventDefault();
+      adjustVolume(-5);
+      break;
+    case "n":
+    case "N":
+      actions.next();
+      break;
+    case "p":
+    case "P":
+      actions.previous();
+      break;
+    case "s":
+    case "S":
+      actions.stop();
+      break;
+    case "r":
+    case "R":
+      actions.toggleOption("repeat");
+      break;
+  }
 });
 
 setView("nowplaying");
