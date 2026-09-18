@@ -386,6 +386,31 @@ pub fn build_search_filters(pairs: &[(&str, &str)], op: &str) -> String {
     }
 }
 
+/// Build a free-text search filter: an OR across the common tags for the query
+/// (wrapped in parentheses), then ANDed with any additional `(tag, value)`
+/// `contains` clauses. Empty when there is nothing to search for.
+pub fn build_any_filter(query: Option<&str>, extra: &[(&str, &str)]) -> String {
+    const FREE_TAGS: &[&str] = &["Title", "Artist", "Album", "AlbumArtist", "Genre", "Track"];
+    let mut clauses: Vec<String> = Vec::new();
+    if let Some(q) = query.filter(|q| !q.is_empty()) {
+        let or: Vec<String> = FREE_TAGS
+            .iter()
+            .map(|t| filter_clause(t, "contains", q))
+            .collect();
+        clauses.push(format!("({})", or.join(" OR ")));
+    }
+    for (tag, value) in extra {
+        if !value.is_empty() {
+            clauses.push(filter_clause(tag, "contains", value));
+        }
+    }
+    match clauses.len() {
+        0 => String::new(),
+        1 => clauses.pop().unwrap(),
+        _ => clauses.join(" AND "),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -499,6 +524,33 @@ mod tests {
         assert_eq!(f, "(Artist == 'AC/DC')");
         let f2 = build_search_filters(&[("Artist", "A"), ("Album", "B")], "contains");
         assert_eq!(f2, "(Artist contains 'A') AND (Album contains 'B')");
+    }
+
+    #[test]
+    fn build_any_filter_builds_free_text_or_and_narrowing() {
+        assert_eq!(build_any_filter(None, &[]), "");
+        assert_eq!(
+            build_any_filter(Some(""), &[("Artist", "A")]),
+            "(Artist contains 'A')"
+        );
+
+        let f = build_any_filter(Some("s"), &[]);
+        assert_eq!(
+            f,
+            "((Title contains 's') OR (Artist contains 's') OR (Album contains 's') \
+             OR (AlbumArtist contains 's') OR (Genre contains 's') OR (Track contains 's'))"
+        );
+
+        let f = build_any_filter(Some("s"), &[("Artist", "a"), ("Album", "")]);
+        assert!(f.starts_with("((Title contains 's') OR"));
+        assert!(f.ends_with(" AND (Artist contains 'a')"));
+    }
+
+    #[test]
+    fn build_any_filter_escapes_query() {
+        let f = build_any_filter(Some("a'b"), &[]);
+        assert!(f.contains("(Title contains 'a\\'b')"));
+        assert!(f.contains("(Track contains 'a\\'b')"));
     }
 
     #[test]
