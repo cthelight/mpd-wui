@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, mpsc, oneshot, watch, RwLock};
+use tokio::sync::{RwLock, broadcast, mpsc, oneshot, watch};
 
 use crate::protocol::{
-    build_search_filters, parse_art, parse_currentsong, parse_list, parse_lsinfo, parse_song_list,
-    parse_status, parse_text, quote_arg, sniff_mime, Response,
+    Response, build_search_filters, parse_art, parse_currentsong, parse_list, parse_lsinfo,
+    parse_song_list, parse_status, parse_text, quote_arg, sniff_mime,
 };
 use crate::types::{Browse, Capabilities, MpdEvent, Snapshot, Song, Status};
 
@@ -26,6 +26,10 @@ pub struct MpdConfig {
     /// never idles, so without a keepalive MPD reaps it after every
     /// quiet period.
     pub keepalive: Duration,
+    /// How long a command may wait for its reply before it is considered
+    /// hung. A wedged MPD (e.g. stuck in a long database scan) must not
+    /// leave the user's request pending forever.
+    pub command_timeout: Duration,
 }
 
 impl MpdConfig {
@@ -35,6 +39,7 @@ impl MpdConfig {
             port,
             password,
             keepalive: Duration::from_secs(30),
+            command_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -97,9 +102,15 @@ impl MpdClient {
             })
             .await
             .map_err(|_| anyhow::anyhow!("mpd command channel closed"))?;
-        rx.await
-            .map_err(|_| anyhow::anyhow!("mpd command dropped"))?
-            .map_err(|e| anyhow::anyhow!(e))
+        match tokio::time::timeout(self.config.command_timeout, rx).await {
+            Ok(reply) => reply
+                .map_err(|_| anyhow::anyhow!("mpd command dropped"))
+                .and_then(|r| r.map_err(|e| anyhow::anyhow!(e))),
+            Err(_) => Err(anyhow::anyhow!(
+                "mpd command timed out after {:?}",
+                self.config.command_timeout
+            )),
+        }
     }
 
     async fn cmd(&self, command: &str) -> anyhow::Result<Response> {
@@ -149,16 +160,6 @@ impl MpdClient {
         Ok(parse_list(&resp, tag))
     }
 
-    /// Filter-based `search` (MPD >= 0.21 filter syntax).
-    pub async fn search(&self, pairs: &[(&str, &str)], op: &str) -> anyhow::Result<Vec<Song>> {
-        let filters = build_search_filters(pairs, op);
-        if filters.is_empty() {
-            return Ok(Vec::new());
-        }
-        let cmd = format!("search {}", quote_arg(&filters));
-        Ok(parse_song_list(&self.cmd(&cmd).await?))
-    }
-
     /// Dump the entire music database — every song with its full metadata — in
     /// a single round-trip, for local (in-process) search.
     ///
@@ -186,6 +187,15 @@ impl MpdClient {
         Ok((songs, playtime))
     }
 
+    /// Number of songs currently in the playlist (`count playlist`).
+    pub async fn playlist_count(&self) -> anyhow::Result<u32> {
+        let resp = self.cmd("count playlist").await?;
+        Ok(resp
+            .get("playlist")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0))
+    }
+
     // -- playback -----------------------------------------------------------
 
     pub async fn play(&self, pos: Option<u32>) -> anyhow::Result<()> {
@@ -194,10 +204,6 @@ impl MpdClient {
             None => self.cmd("play").await,
         }
         .map(|_| ())
-    }
-
-    pub async fn play_id(&self, id: u32) -> anyhow::Result<()> {
-        self.cmd(&format!("playid {id}")).await.map(|_| ())
     }
 
     pub async fn pause(&self, state: Option<bool>) -> anyhow::Result<()> {
@@ -236,19 +242,6 @@ impl MpdClient {
         single: Option<bool>,
         consume: Option<bool>,
     ) -> anyhow::Result<()> {
-        let mut cmds = Vec::new();
-        if let Some(v) = random {
-            cmds.push(format!("random {}", u32::from(v)));
-        }
-        if let Some(v) = repeat {
-            cmds.push(format!("repeat {}", u32::from(v)));
-        }
-        if let Some(v) = single {
-            cmds.push(format!("single {}", u32::from(v)));
-        }
-        if let Some(v) = consume {
-            cmds.push(format!("consume {}", u32::from(v)));
-        }
         // Sent as individual commands: `command_list_*` was removed in
         // MPD 0.22, and a desynchronized reply stream corrupts the
         // cached snapshot (e.g. "Nothing playing" while a song plays).
@@ -285,14 +278,16 @@ impl MpdClient {
             .map(|_| ())
     }
 
-    pub async fn findadd(&self, tag: &str, value: &str) -> anyhow::Result<()> {
-        self.cmd(&format!("findadd {tag} {}", quote_arg(value)))
-            .await
-            .map(|_| ())
-    }
-
     pub async fn clear(&self) -> anyhow::Result<()> {
         self.cmd("clear").await.map(|_| ())
+    }
+
+    /// Remove a positional range from the playlist, `clearid start : end`
+    /// (inclusive). MPD ignores endpoints past the end of the playlist.
+    pub async fn clear_id_range(&self, start: u32, end: u32) -> anyhow::Result<()> {
+        self.cmd(&format!("clearid {start} : {end}"))
+            .await
+            .map(|_| ())
     }
 
     pub async fn delete_ids(&self, ids: &[u32]) -> anyhow::Result<()> {
@@ -420,10 +415,6 @@ impl MpdClient {
         self.events.subscribe()
     }
 
-    pub fn config(&self) -> &MpdConfig {
-        &self.config
-    }
-
     pub async fn capabilities(&self) -> Capabilities {
         let caps = self.caps.read().await.clone();
         if !caps.commands.is_empty() {
@@ -446,7 +437,13 @@ fn art_mime(data: &[u8]) -> String {
 
 enum SessionOutcome {
     Closed,
-    Lost(String),
+    /// The connection ended. `established` is true when the session had
+    /// completed its handshake: that is a transient drop (retry quickly),
+    /// whereas a never-established session means MPD is down (back off).
+    Lost {
+        error: String,
+        established: bool,
+    },
 }
 
 async fn command_loop(
@@ -460,9 +457,19 @@ async fn command_loop(
     loop {
         match run_command_session(&config, &mut rx, &events, &snap, &caps).await {
             SessionOutcome::Closed => return,
-            SessionOutcome::Lost(e) => {
-                tracing::warn!(error = %e, "mpd command connection lost; reconnecting");
+            SessionOutcome::Lost { error, established } => {
+                tracing::warn!(
+                    error = %error,
+                    established,
+                    "mpd command connection lost; reconnecting"
+                );
                 let _ = events.send(MpdEvent::Disconnected);
+                if established {
+                    // The session was serving commands; a quick retry is the
+                    // right response, not an escalating backoff.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(10));
             }
@@ -477,9 +484,16 @@ async fn run_command_session(
     snap: &watch::Sender<Snapshot>,
     caps: &Arc<RwLock<Capabilities>>,
 ) -> SessionOutcome {
+    // False until the handshake succeeds; see `SessionOutcome::Lost`.
+    let mut established = false;
     let stream = match TcpStream::connect((config.host.as_str(), config.port)).await {
         Ok(s) => s,
-        Err(e) => return SessionOutcome::Lost(e.to_string()),
+        Err(e) => {
+            return SessionOutcome::Lost {
+                error: e.to_string(),
+                established,
+            };
+        }
     };
     let _ = stream.set_nodelay(true);
     let (r, w) = stream.into_split();
@@ -488,26 +502,42 @@ async fn run_command_session(
 
     let mut greeting = String::new();
     if reader.read_line(&mut greeting).await.is_err() {
-        return SessionOutcome::Lost("no greeting".into());
+        return SessionOutcome::Lost {
+            error: "no greeting".into(),
+            established,
+        };
     }
     let version = greeting.split_whitespace().last().unwrap_or("").to_string();
 
     if let Some(pw) = &config.password {
         let line = format!("password {}\n", quote_arg(pw));
         if writer.write_all(line.as_bytes()).await.is_err() {
-            return SessionOutcome::Lost("write password".into());
+            return SessionOutcome::Lost {
+                error: "write password".into(),
+                established,
+            };
         }
         if writer.flush().await.is_err() {
-            return SessionOutcome::Lost("flush".into());
+            return SessionOutcome::Lost {
+                error: "flush".into(),
+                established,
+            };
         }
         let mut resp = String::new();
         if reader.read_line(&mut resp).await.is_err() {
-            return SessionOutcome::Lost("read auth response".into());
+            return SessionOutcome::Lost {
+                error: "read auth response".into(),
+                established,
+            };
         }
         if !resp.trim().starts_with("OK") {
-            return SessionOutcome::Lost(format!("auth failed: {}", resp.trim()));
+            return SessionOutcome::Lost {
+                error: format!("auth failed: {}", resp.trim()),
+                established,
+            };
         }
     }
+    established = true;
 
     {
         caps.write().await.version = version;
@@ -552,14 +582,20 @@ async fn run_command_session(
                     }
                     Err(e) => {
                         let _ = req.reply.send(Err(e.clone()));
-                        return SessionOutcome::Lost(e);
+                        return SessionOutcome::Lost {
+                            error: e,
+                            established,
+                        };
                     }
                 },
                 None => return SessionOutcome::Closed,
             },
             _ = keepalive.tick() => {
                 if let Err(e) = send_one(&mut reader, &mut writer, "noop").await {
-                    return SessionOutcome::Lost(e);
+                    return SessionOutcome::Lost {
+                        error: e,
+                        established,
+                    };
                 }
             }
         }
@@ -696,6 +732,10 @@ async fn idle_session(
         }
         let mut line = String::new();
         loop {
+            // `read_line` appends; without clearing, a batch's `OK` is glued
+            // to the preceding `changed:` line and never matches, so the loop
+            // would never re-issue `idle` after the first change.
+            line.clear();
             match reader.read_line(&mut line).await {
                 Ok(0) => return true,
                 Ok(_) => {

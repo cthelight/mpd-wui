@@ -3,6 +3,7 @@ name = "mpd-client"
 description = "Minimal async MPD protocol client: connections, parsing, idle events, binary art."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -13,3 +14,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 mpd-mock = { path = "../mpd-mock" }
+
+[lints]
+workspace = true

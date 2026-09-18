@@ -3,9 +3,14 @@
 //! Release builds embed the files in the binary; debug builds read them from
 //! disk so frontend edits need no rebuild.
 
+#[cfg(not(debug_assertions))]
+use std::collections::HashMap;
+#[cfg(not(debug_assertions))]
+use std::sync::{LazyLock, Mutex};
+
 use axum::body::Bytes;
 use axum::extract::Request;
-use axum::http::{header, HeaderName, StatusCode};
+use axum::http::{HeaderName, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
@@ -34,13 +39,45 @@ pub async fn static_handler(req: Request) -> Response {
     }
 }
 
+/// Release builds embed assets as `&'static [u8]`, so each file is wrapped
+/// exactly once (zero-copy) and shared across every request. Debug builds skip
+/// the cache on purpose: `web/` is read from disk on each request, so frontend
+/// edits are picked up without a rebuild.
+#[cfg(not(debug_assertions))]
+static ASSET_BYTES: LazyLock<Mutex<HashMap<String, Bytes>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 fn serve(file: rust_embed::EmbeddedFile, path: &str) -> Response {
-    let data: Bytes = Bytes::from(file.data.to_vec());
-    let headers: [(HeaderName, String); 2] = [
-        (header::CONTENT_TYPE, mime_for(path).to_string()),
-        (header::CACHE_CONTROL, cache_for(path).to_string()),
+    let data = asset_bytes(&file, path);
+    let headers: [(HeaderName, &str); 3] = [
+        (header::CONTENT_TYPE, mime_for(path)),
+        (header::CACHE_CONTROL, cache_for(path)),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
     ];
     (StatusCode::OK, headers, data).into_response()
+}
+
+fn asset_bytes(file: &rust_embed::EmbeddedFile, path: &str) -> Bytes {
+    #[cfg(not(debug_assertions))]
+    {
+        let mut cache = ASSET_BYTES.lock().expect("asset cache lock poisoned");
+        if let Some(bytes) = cache.get(path) {
+            return bytes.clone();
+        }
+        let bytes = match &file.data {
+            // Release embeds `&'static [u8]`; wrap it without copying.
+            std::borrow::Cow::Borrowed(static_data) => Bytes::from_static(static_data),
+            // Defensive fallback (not expected in release builds).
+            std::borrow::Cow::Owned(data) => Bytes::copy_from_slice(data),
+        };
+        cache.insert(path.to_string(), bytes.clone());
+        bytes
+    }
+    #[cfg(debug_assertions)]
+    {
+        let _ = path;
+        Bytes::copy_from_slice(&file.data)
+    }
 }
 
 /// The shell is revalidated on every load; assets are cached briefly.

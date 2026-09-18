@@ -8,7 +8,10 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use anyhow::Context;
-use mpd_api::{router, spawn_cache_invalidation, AppState};
+use axum::extract::Request;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use mpd_api::{AppState, router, spawn_cache_invalidation};
 use mpd_client::{MpdClient, MpdConfig};
 
 #[tokio::main]
@@ -49,10 +52,31 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(client, Duration::from_secs(cache_ttl));
     spawn_cache_invalidation(state.clone());
 
-    let app = router(state).fallback(mpd_web::static_handler);
+    let app = router(state).fallback(fallback);
     let addr = SocketAddr::from((bind_addr, port));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "serving MPD web UI");
-    axum::serve(tokio::net::TcpListener::bind(addr).await?, app).await?;
+
+    tokio::select! {
+        result = axum::serve(listener, app) => result?,
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("shutdown signal received");
+        }
+    }
 
     Ok(())
+}
+
+/// Static assets for the frontend; unknown `/api/` paths get a JSON 404
+/// instead of the index.html fallback (the SPA would swallow them silently).
+async fn fallback(req: Request) -> Response {
+    if req.uri().path().starts_with("/api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"not found"}"#,
+        )
+            .into_response();
+    }
+    mpd_web::static_handler(req).await
 }

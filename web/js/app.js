@@ -4,6 +4,11 @@ import { config } from "./config.js";
 import { mountNowPlaying, renderMiniPlayer } from "./nowplaying.js";
 import { mountQueue } from "./queue.js";
 import { mountLibrary } from "./library.js";
+import { toast } from "./util.js";
+
+function fail(err) {
+  toast(err?.message || String(err));
+}
 
 const state = {
   view: "nowplaying",
@@ -20,20 +25,20 @@ const actions = {
   playPause() {
     const status = state.snapshot?.status;
     if (!status) return;
-    if (status.state === "play") post("/pause", { state: true });
-    else post("/play", {});
+    if (status.state === "play") post("/pause", { state: true }).catch(fail);
+    else post("/play", {}).catch(fail);
   },
   next() {
-    post("/next", {});
+    post("/next", {}).catch(fail);
   },
   previous() {
-    post("/previous", {});
+    post("/previous", {}).catch(fail);
   },
   stop() {
-    post("/stop", {});
+    post("/stop", {}).catch(fail);
   },
   seek(time) {
-    post("/seek", { time }).catch(() => {});
+    post("/seek", { time }).catch(fail);
     if (state.snapshot) {
       state.snapshot.status.elapsed = time;
       state.lastSync = performance.now();
@@ -41,7 +46,7 @@ const actions = {
     }
   },
   volume(value) {
-    post("/volume", { value }).catch(() => {});
+    post("/volume", { value }).catch(fail);
     if (state.snapshot) state.snapshot.status.volume = value;
   },
   toggleOption(key) {
@@ -49,9 +54,10 @@ const actions = {
     const next = !state.snapshot.status[key];
     state.snapshot.status[key] = next;
     renderSnapshot();
-    post("/options", { [key]: next }).catch(() => {
+    post("/options", { [key]: next }).catch((err) => {
       // The command failed: re-sync with the server instead of keeping
       // a state MPD never applied.
+      fail(err);
       get("/status").then(setSnapshot).catch(() => {});
     });
   },
@@ -95,9 +101,9 @@ function renderView() {
     mountedViews.push(view);
     if (state.snapshot) view.update(state.snapshot);
   } else if (state.view === "queue") {
-    mountedViews.push(mountQueue(viewEl, state, actions));
+    mountedViews.push(mountQueue(viewEl, state));
   } else if (state.view === "library") {
-    mountedViews.push(mountLibrary(viewEl, state, actions));
+    mountedViews.push(mountLibrary(viewEl));
   }
 }
 
@@ -109,12 +115,15 @@ function setView(view) {
   renderView();
 }
 
+let wsAttempts = 0;
+
 function connect() {
   const url = config.wsUrl(location.protocol, location.host);
   const ws = new WebSocket(url);
   let closed = false;
 
   ws.onopen = () => {
+    wsAttempts = 0;
     setConn(true);
   };
   ws.onmessage = (event) => {
@@ -137,7 +146,11 @@ function connect() {
   ws.onclose = () => {
     closed = true;
     setConn(false);
-    setTimeout(connect, 750);
+    // Back off exponentially (750ms, 1.5s, 3s, ...) capped at 10s; a healthy
+    // open resets the counter.
+    const delay = Math.min(750 * 2 ** wsAttempts, 10000);
+    wsAttempts += 1;
+    setTimeout(connect, delay);
   };
   ws.onerror = () => {
     if (!closed) ws.close();
@@ -175,6 +188,8 @@ function adjustVolume(delta) {
 document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (isFormTarget(event.target)) return;
+  // Let focused rows (library drill rows) handle Enter/Space themselves.
+  if (event.defaultPrevented) return;
   switch (event.key) {
     case " ":
       event.preventDefault();

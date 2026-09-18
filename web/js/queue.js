@@ -2,6 +2,7 @@
 import { get, post } from "./api.js";
 import { icon } from "./icons.js";
 import { formatTime } from "./nowplaying.js";
+import { escapeHtml, toast } from "./util.js";
 
 function title(song) {
   return song.title || song.file.split("/").pop() || song.file || "Unknown track";
@@ -26,16 +27,6 @@ function rowHtml(song, index, currentId) {
       <button class="row-btn" data-row-act="remove" title="Remove">${icon("trash", 16)}</button>
     </li>
   `;
-}
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[ch]));
 }
 
 export function mountQueue(container, state) {
@@ -68,10 +59,28 @@ export function mountQueue(container, state) {
   let refreshToken = 0;
   let dragging = null;
   let dropTarget = null;
+  let rowRects = [];
 
   function currentId() {
     return state.snapshot?.song?.id ?? null;
   }
+
+  // Viewport-relative row centers, cached so dragover does not force a layout
+  // read per row. Invalidated whenever the list, its layout or the scroll
+  // position changes.
+  let rectScrollTop = null;
+  function refreshRects() {
+    rectScrollTop = container.scrollTop;
+    rowRects = [...list.querySelectorAll(".queue-row")].map((row) => {
+      const rect = row.getBoundingClientRect();
+      return { row, mid: rect.top + rect.height / 2 };
+    });
+  }
+
+  const invalidateRects = () => {
+    rowRects = [];
+    rectScrollTop = null;
+  };
 
   function render() {
     list.innerHTML = songs.map((song, i) => rowHtml(song, i, currentId())).join("");
@@ -81,6 +90,19 @@ export function mountQueue(container, state) {
     dropSlot.hidden = true;
     dropTarget = null;
     count.textContent = `${songs.length} tracks`;
+    refreshRects();
+  }
+
+  // A snapshot with an unchanged playlist version only moves the playhead
+  // (MPD does not bump the version when a track starts), so patch the
+  // highlight instead of re-rendering the whole list.
+  function patchCurrent() {
+    const id = currentId();
+    const was = list.querySelector(".queue-row.current");
+    if (was && id != null && was.dataset.id === String(id)) return;
+    if (was) was.classList.remove("current");
+    if (id == null) return;
+    list.querySelector(`.queue-row[data-id="${id}"]`)?.classList.add("current");
   }
 
   async function refresh() {
@@ -103,7 +125,7 @@ export function mountQueue(container, state) {
       if (action === "move") await post("/queue/move", { id: extra.id, to: extra.to });
       await refresh();
     } catch (err) {
-      console.warn("queue action failed", err);
+      toast(err?.message || String(err));
     }
   }
 
@@ -118,7 +140,7 @@ export function mountQueue(container, state) {
     if (action === "remove") {
       act("remove", { id });
     } else if (action === "play" || !action) {
-      post("/play", { position: index }).catch((err) => console.warn(err));
+      post("/play", { position: index }).catch((err) => toast(err?.message || String(err)));
     }
   });
 
@@ -152,6 +174,7 @@ export function mountQueue(container, state) {
     dragging = { id: Number(row.dataset.id), index: Number(row.dataset.index) };
     row.classList.add("dragging");
     section.classList.add("is-dragging");
+    refreshRects();
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", String(dragging.id));
   });
@@ -163,6 +186,7 @@ export function mountQueue(container, state) {
     section.classList.remove("is-dragging");
     list.querySelectorAll(".queue-row.dragging").forEach((row) => row.classList.remove("dragging"));
     clearDraggable();
+    invalidateRects();
   }
 
   list.addEventListener("dragend", clearDragState);
@@ -170,11 +194,11 @@ export function mountQueue(container, state) {
   // Row whose center is closest to the pointer; also resolves the gaps
   // between rows, the header and the area below the last row.
   function nearestRow(y) {
+    if (!rowRects.length || rectScrollTop !== container.scrollTop) refreshRects();
     let best = null;
     let bestDist = Infinity;
-    for (const row of list.querySelectorAll(".queue-row")) {
-      const rect = row.getBoundingClientRect();
-      const dist = Math.abs(y - (rect.top + rect.height / 2));
+    for (const { row, mid } of rowRects) {
+      const dist = Math.abs(y - mid);
       if (dist < bestDist) {
         bestDist = dist;
         best = row;
@@ -190,6 +214,8 @@ export function mountQueue(container, state) {
     // insertBefore(node, node) is a no-op, so this is safe when the slot
     // already sits in the requested position.
     list.insertBefore(dropSlot, after ? row.nextSibling : row);
+    // The slot shifts the rows below it; drop the stale centers.
+    invalidateRects();
   }
 
   section.addEventListener("dragover", (event) => {
@@ -198,8 +224,8 @@ export function mountQueue(container, state) {
     event.dataTransfer.dropEffect = "move";
     const row = nearestRow(event.clientY);
     if (!row) return;
-    const rect = row.getBoundingClientRect();
-    setDropTarget(row, event.clientY > rect.top + rect.height / 2);
+    const entry = rowRects.find((item) => item.row === row);
+    setDropTarget(row, event.clientY > (entry ? entry.mid : 0));
   });
 
   section.addEventListener("drop", (event) => {
@@ -219,7 +245,7 @@ export function mountQueue(container, state) {
         version = newVersion;
         refresh();
       } else {
-        render();
+        patchCurrent();
       }
     },
     progress() {},

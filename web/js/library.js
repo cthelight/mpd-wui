@@ -1,6 +1,7 @@
 import { get, post } from "./api.js";
 import { icon } from "./icons.js";
 import { formatTime } from "./nowplaying.js";
+import { escapeHtml, toast } from "./util.js";
 
 const COLLECTION_TYPES = [
   { key: "artist", label: "Artists" },
@@ -9,16 +10,6 @@ const COLLECTION_TYPES = [
   { key: "genre", label: "Genres" },
   { key: "date", label: "Years" },
 ];
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[ch]));
-}
 
 function labelFor(key) {
   return COLLECTION_TYPES.find((item) => item.key === key)?.label ?? key;
@@ -119,8 +110,9 @@ function valueData(targetKey, value, subtitle, drill) {
 function rowHtml(data, index) {
   const iconName =
     data.icon ?? (data.kind === "dir" ? "folder" : data.kind === "value" ? "music" : "file");
+  const focusable = data.drill ? ' tabindex="0" role="button"' : "";
   return `
-    <li class="row ${data.kind}${data.drill ? " drill" : ""}" data-index="${index}">
+    <li class="row ${data.kind}${data.drill ? " drill" : ""}" data-index="${index}"${focusable}>
       <span class="row-icon">${icon(iconName, 18)}</span>
       <div class="row-meta">
         <span class="row-title" title="${escapeHtml(data.title)}">${escapeHtml(data.title)}</span>
@@ -151,7 +143,7 @@ async function queueTarget(target, play, button) {
   try {
     await post("/queue/add", { targets: [target], play });
   } catch (err) {
-    console.warn("queue add failed", err);
+    toast(err?.message || String(err));
   } finally {
     button.disabled = false;
     button.innerHTML = original;
@@ -170,6 +162,18 @@ function bindList(list, store, onDrill) {
       if (action.dataset.rowAct === "play") queueTarget(data.target, true, action);
       return;
     }
+    if (data.drill) onDrill(data);
+  });
+
+  // Keyboard activation for focusable drill rows (Enter/Space). preventDefault
+  // also stops the app-level shortcut handler from firing for the same key.
+  list.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = event.target.closest?.(".row");
+    if (!row || event.target !== row) return;
+    const data = store.rows[Number(row.dataset.index)];
+    if (!data) return;
+    event.preventDefault();
     if (data.drill) onDrill(data);
   });
 }

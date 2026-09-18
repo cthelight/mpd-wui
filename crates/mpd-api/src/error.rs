@@ -1,7 +1,7 @@
 //! API error type: maps internal and extractor failures to JSON responses.
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 #[derive(Debug)]
@@ -27,6 +27,7 @@ impl ApiError {
     }
 
     pub fn upstream(error: anyhow::Error) -> Self {
+        tracing::warn!(error = %error, "mpd upstream error");
         Self::new(StatusCode::BAD_GATEWAY, error.to_string())
     }
 }
@@ -61,6 +62,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
             self.status,
+            [(header::CONTENT_TYPE, "application/json")],
             serde_json::json!({ "error": self.message }).to_string(),
         )
             .into_response()

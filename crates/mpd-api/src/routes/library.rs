@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
-use axum::extract::{Query, State};
 use axum::Json;
+use axum::extract::{Query, State};
 
 use mpd_client::Browse;
 
+use crate::AppState;
 use crate::error::ApiError;
 use crate::search::{self, Field, SearchHit};
-use crate::AppState;
 
 use super::param;
 

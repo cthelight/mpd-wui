@@ -1,10 +1,10 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 
 use mpd_client::{Capabilities, Snapshot, Song};
 
-use crate::error::ApiError;
 use crate::AppState;
+use crate::error::ApiError;
 
 pub async fn status(State(state): State<AppState>) -> Result<Json<Snapshot>, ApiError> {
     let status = state.client.status().await?;

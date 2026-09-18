@@ -1,13 +1,15 @@
+#![allow(clippy::unwrap_used)]
+
 use std::time::Duration;
 
-use axum::body::Body;
-use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
+use axum::body::Body;
+use axum::http::{HeaderMap, Request, StatusCode, header};
 use http_body_util::BodyExt;
-use mpd_api::{router, spawn_cache_invalidation, AppState};
+use mpd_api::{AppState, router, spawn_cache_invalidation};
 use mpd_client::{MpdClient, MpdConfig, MpdEvent};
 use mpd_mock::{MockMpd, MockState};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 type FieldList = Vec<(String, String)>;
@@ -84,6 +86,17 @@ async fn call(router: &Router, req: Request<Body>) -> (StatusCode, HeaderMap, ax
 
 fn as_json(bytes: &axum::body::Bytes) -> Value {
     serde_json::from_slice(bytes).expect("response is JSON")
+}
+
+/// The `file` values of the track hits in a search response, in order.
+fn hit_files(value: &Value) -> Vec<String> {
+    let Some(hits) = value.as_array() else {
+        return Vec::new();
+    };
+    hits.iter()
+        .filter_map(|hit| hit.pointer("/song/file").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 #[tokio::test]
@@ -252,12 +265,14 @@ async fn search_filters_locally_across_fields_and_tags() {
     let value = as_json(&body);
     let hits = value.as_array().expect("array");
     assert_eq!(hits.len(), 2);
-    assert!(hits
-        .iter()
-        .any(|h| h["kind"] == "track" && h["song"]["file"] == "beta/two.flac"));
-    assert!(hits
-        .iter()
-        .any(|h| h["kind"] == "artist" && h["name"] == "Beta"));
+    assert!(
+        hits.iter()
+            .any(|h| h["kind"] == "track" && h["song"]["file"] == "beta/two.flac")
+    );
+    assert!(
+        hits.iter()
+            .any(|h| h["kind"] == "artist" && h["name"] == "Beta")
+    );
 
     // Multi-tag exact constraints are ANDed (the case MPD's filter grammar broke on).
     let (status, _, body) = call(&router, get("/api/search?genre=rock&title=two")).await;
@@ -282,6 +297,50 @@ async fn search_filters_locally_across_fields_and_tags() {
     let (status, _, body) = call(&router, get("/api/search")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(as_json(&body).as_array().expect("array").len(), 0);
+}
+
+#[tokio::test]
+async fn search_serves_stale_snapshot_until_background_refresh_lands() {
+    let mock = MockMpd::start(MockState::default()).await;
+    let (host, port) = mock.host_port();
+    let client = MpdClient::connect(MpdConfig::new(host, port, None)).await;
+    let state = AppState::new(client, Duration::from_millis(30));
+    let router = router(state);
+
+    // The library dump takes 250ms, well beyond the 30ms snapshot TTL.
+    mock.set_search(vec![fields(&[("file", "a/one.flac"), ("Title", "One")])])
+        .await;
+    mock.set_command_delay("search", 250).await;
+
+    // First load: no stale data, so the request waits for the dump.
+    let (status, _, body) = call(&router, get("/api/search?q=one")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hit_files(&as_json(&body)), vec!["a/one.flac".to_string()]);
+
+    // The server-side library changes, then the TTL expires.
+    mock.set_search(vec![fields(&[("file", "a/two.flac"), ("Title", "Two")])])
+        .await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    // The stale snapshot is served immediately and a background refresh
+    // starts (it is still in flight for the next two requests).
+    let (status, _, body) = call(&router, get("/api/search?q=one")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        hit_files(&as_json(&body)),
+        vec!["a/one.flac".to_string()],
+        "stale snapshot must be served before the refresh lands"
+    );
+
+    // A request during the in-flight refresh still gets the stale data.
+    let (_, _, body) = call(&router, get("/api/search?q=one")).await;
+    assert_eq!(hit_files(&as_json(&body)), vec!["a/one.flac".to_string()]);
+
+    // Once the refresh lands, the new data is visible.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let (status, _, body) = call(&router, get("/api/search?q=two")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hit_files(&as_json(&body)), vec!["a/two.flac".to_string()]);
 }
 
 #[tokio::test]
@@ -381,9 +440,29 @@ async fn playback_rejects_invalid_json() {
     assert!(as_json(&body)["error"].is_string());
 }
 
+/// The mock's `searchadd` appends every group in `search` regardless of the
+/// filter, so tests give it one group per collection tag they exercise.
+fn wipe_state(playlist: Vec<FieldList>, search: Vec<FieldList>) -> MockState {
+    MockState {
+        playlist,
+        search,
+        lsinfo: fields(&[("file", "a/one.flac"), ("Title", "One")]),
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn queue_add_and_management_succeed() {
-    let (router, _state, _mock) = app().await;
+    let initial = wipe_state(
+        vec![],
+        vec![
+            fields(&[("file", "s/a.flac"), ("Id", "900"), ("Artist", "A")]),
+            fields(&[("file", "s/b.flac"), ("Id", "901"), ("Album", "B")]),
+            fields(&[("file", "s/c.flac"), ("Id", "902"), ("AlbumArtist", "C")]),
+            fields(&[("file", "s/d.flac"), ("Id", "903"), ("Genre", "D")]),
+        ],
+    );
+    let (router, _state, _mock) = app_with(initial).await;
 
     let add = json!({
         "targets": [
@@ -397,6 +476,12 @@ async fn queue_add_and_management_succeed() {
     });
     let (status, _, _) = call(&router, post_json("/api/queue/add", &add)).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The wipe kept exactly the appended songs: 1 path + 4 search hits.
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(value.as_array().expect("array").len(), 5);
 
     let (status, _, _) = call(
         &router,
@@ -417,6 +502,140 @@ async fn queue_add_and_management_succeed() {
 
     let (status, _, _) = call(&router, post_raw("/api/queue/shuffle", "")).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn queue_add_play_replaces_queue_with_new_songs() {
+    let initial = wipe_state(
+        vec![
+            fields(&[("file", "old/one.flac"), ("Id", "50")]),
+            fields(&[("file", "old/two.flac"), ("Id", "51")]),
+        ],
+        vec![fields(&[
+            ("file", "new/one.flac"),
+            ("Id", "900"),
+            ("Artist", "X"),
+        ])],
+    );
+    let (router, _state, _mock) = app_with(initial).await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json(
+            "/api/queue/add",
+            &json!({"targets": [{"artist": "X"}], "play": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    assert_eq!(songs.len(), 1, "old queue must be gone");
+    assert_eq!(songs[0]["file"], "new/one.flac");
+}
+
+#[tokio::test]
+async fn queue_add_play_empty_collection_rejected_before_wipe() {
+    // No search results: the target would add nothing, so the request is a
+    // client error and the queue must be left untouched.
+    let initial = wipe_state(
+        vec![fields(&[("file", "old/one.flac"), ("Id", "50")])],
+        vec![],
+    );
+    let (router, _state, _mock) = app_with(initial).await;
+
+    let (status, _, body) = call(
+        &router,
+        post_json(
+            "/api/queue/add",
+            &json!({"targets": [{"artist": "Nobody"}], "play": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(as_json(&body)["error"], "no matching tracks");
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    assert_eq!(songs.len(), 1);
+    assert_eq!(songs[0]["file"], "old/one.flac");
+}
+
+#[tokio::test]
+async fn queue_add_play_missing_path_rejected_before_wipe() {
+    let initial = wipe_state(
+        vec![fields(&[("file", "old/one.flac"), ("Id", "50")])],
+        vec![],
+    );
+    let (router, _state, mock) = app_with(initial).await;
+    mock.set_fail_commands(vec!["lsinfo".to_string()]).await;
+
+    let (status, _, body) = call(
+        &router,
+        post_json(
+            "/api/queue/add",
+            &json!({"targets": [{"path": "missing.flac"}], "play": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        as_json(&body)["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("no such path")
+    );
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    assert_eq!(songs.len(), 1);
+    assert_eq!(songs[0]["file"], "old/one.flac");
+}
+
+#[tokio::test]
+async fn queue_add_play_failure_mid_add_preserves_old_queue() {
+    // The first target adds a song, the second fails: the request must roll
+    // back only what it appended, leaving the caller's old queue intact.
+    let initial = wipe_state(
+        vec![
+            fields(&[("file", "old/one.flac"), ("Id", "50")]),
+            fields(&[("file", "old/two.flac"), ("Id", "51")]),
+        ],
+        vec![
+            fields(&[("file", "new/one.flac"), ("Id", "900"), ("Artist", "X")]),
+            fields(&[("file", "new/two.flac"), ("Id", "901"), ("Artist", "X")]),
+        ],
+    );
+    let (router, _state, mock) = app_with(initial).await;
+    mock.set_fail_commands(vec!["searchadd".to_string()]).await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json(
+            "/api/queue/add",
+            &json!({
+                "targets": [{"path": "a/one.flac"}, {"artist": "X"}],
+                "play": true
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    assert_eq!(songs.len(), 2, "compensation must undo the partial add");
+    assert_eq!(songs[0]["file"], "old/one.flac");
+    assert_eq!(songs[1]["file"], "old/two.flac");
 }
 
 #[tokio::test]

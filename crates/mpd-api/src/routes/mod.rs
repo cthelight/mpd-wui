@@ -6,8 +6,8 @@ pub mod playback;
 pub mod queue;
 pub mod status;
 
-use axum::extract::rejection::JsonRejection;
 use axum::Json;
+use axum::extract::rejection::JsonRejection;
 
 /// Unwrap an optional JSON body extractor, mapping every rejection to a 400.
 pub(crate) fn json_body<T>(

@@ -1,7 +1,7 @@
 //! One-way WebSocket: server pushes player snapshots and database notices.
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use serde_json::json;
 
@@ -85,6 +85,7 @@ pub fn encode_event(event: &MpdEvent) -> Option<serde_json::Value> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use mpd_client::Status;

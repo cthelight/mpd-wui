@@ -3,7 +3,11 @@ name = "mpd-mock"
 description = "In-process mock MPD server for tests (dev-only, never shipped)."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
 tokio = { workspace = true }
+
+[lints]
+workspace = true

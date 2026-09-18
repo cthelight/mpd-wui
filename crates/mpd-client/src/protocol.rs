@@ -439,7 +439,7 @@ pub fn build_search_filters(pairs: &[(&str, &str)], op: &str) -> String {
     }
     match clauses.len() {
         0 => String::new(),
-        1 => clauses.pop().unwrap(),
+        1 => clauses.pop().expect("single clause"),
         _ => format!("({})", clauses.join(" AND ")),
     }
 }
@@ -449,6 +449,7 @@ pub fn build_search_filters(pairs: &[(&str, &str)], op: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

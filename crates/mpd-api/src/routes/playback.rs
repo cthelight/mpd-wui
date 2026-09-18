@@ -1,11 +1,11 @@
-use axum::extract::rejection::JsonRejection;
-use axum::extract::State;
-use axum::http::StatusCode;
 use axum::Json;
+use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
+use axum::http::StatusCode;
 
+use crate::AppState;
 use crate::dto::{OptionsReq, PauseReq, PlayReq, SeekReq, VolumeReq};
 use crate::error::ApiError;
-use crate::AppState;
 
 use super::json_body;
 

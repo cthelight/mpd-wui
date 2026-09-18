@@ -1,13 +1,13 @@
-use axum::extract::rejection::JsonRejection;
-use axum::extract::State;
-use axum::http::StatusCode;
 use axum::Json;
+use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
+use axum::http::StatusCode;
 
 use mpd_client::MpdClient;
 
+use crate::AppState;
 use crate::dto::{AddReq, MoveReq, QueueTarget, RemoveReq};
 use crate::error::ApiError;
-use crate::AppState;
 
 use super::json_body;
 
@@ -17,15 +17,88 @@ pub async fn add(
 ) -> Result<StatusCode, ApiError> {
     let req = json_body(body)?;
     if req.play {
-        state.client.clear().await?;
+        add_and_play(&state, &req.targets).await
+    } else {
+        for target in &req.targets {
+            add_target(&state.client, target).await?;
+        }
+        Ok(StatusCode::NO_CONTENT)
     }
-    for target in &req.targets {
-        add_target(&state.client, target).await?;
+}
+
+/// Replace the queue with `targets` and start playback.
+///
+/// The new songs are appended after the existing queue, then the old prefix
+/// is deleted. Appending first (instead of clearing first) means a failure
+/// mid-add only requires deleting the songs this request appended, leaving
+/// the caller's old queue intact.
+async fn add_and_play(state: &AppState, targets: &[QueueTarget]) -> Result<StatusCode, ApiError> {
+    let client = &state.client;
+    if targets.is_empty() {
+        return Err(ApiError::bad_request("nothing to add"));
     }
-    if req.play {
-        state.client.play(Some(0)).await?;
+    // Validate every target before touching the queue: a target that would
+    // add nothing is a client error and must not disturb the queue.
+    for target in targets {
+        validate_target(client, target).await?;
     }
+
+    let old_len = client.playlist_count().await?;
+
+    // Append each target, tracking how many songs were added so far.
+    let mut added: u32 = 0;
+    for target in targets {
+        let before = client.playlist_count().await?;
+        if let Err(e) = add_target(client, target).await {
+            if added > 0 {
+                // Compensation: drop only what this request appended.
+                let _ = client.clear_id_range(old_len, old_len + added - 1).await;
+            }
+            return Err(e);
+        }
+        let after = client.playlist_count().await?;
+        added += after.saturating_sub(before);
+    }
+    if added == 0 {
+        return Err(ApiError::bad_request("nothing to add"));
+    }
+
+    // Drop the old prefix, then start at the top. If this fails the queue
+    // holds old+new, which the user can still recover by hand.
+    if old_len > 0 {
+        client.clear_id_range(0, old_len - 1).await?;
+    }
+    client.play(Some(0)).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Check that a target would actually add songs, before the queue is touched.
+async fn validate_target(client: &MpdClient, target: &QueueTarget) -> Result<(), ApiError> {
+    match target {
+        QueueTarget::Path { path } => {
+            client
+                .lsinfo(path)
+                .await
+                .map_err(|_| ApiError::not_found(format!("no such path: {path}")))?;
+            Ok(())
+        }
+        QueueTarget::Artist { artist } => count_target(client, "Artist", artist).await,
+        QueueTarget::Album { album } => count_target(client, "Album", album).await,
+        QueueTarget::AlbumArtist { albumartist } => {
+            count_target(client, "AlbumArtist", albumartist).await
+        }
+        QueueTarget::Genre { genre } => count_target(client, "Genre", genre).await,
+        QueueTarget::Date { date } => count_target(client, "Date", date).await,
+    }
+}
+
+async fn count_target(client: &MpdClient, tag: &str, value: &str) -> Result<(), ApiError> {
+    let (songs, _) = client.count(&[(tag, value)], "==").await?;
+    if songs == 0 {
+        Err(ApiError::bad_request("no matching tracks"))
+    } else {
+        Ok(())
+    }
 }
 
 pub async fn remove(

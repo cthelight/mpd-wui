@@ -35,7 +35,6 @@ function setArt(container, song) {
   }
   const img = document.createElement("img");
   img.alt = "";
-  img.loading = "lazy";
   img.src = url;
   img.addEventListener("load", () => container.classList.remove("empty"));
   img.addEventListener("error", () => {
@@ -53,9 +52,11 @@ function setPlayButton(button, state) {
 }
 
 function updateProgress(container, elapsed, duration) {
+  const seek = container.querySelector("[data-seek]");
+  // While the user drags the thumb, live updates must not yank it back.
+  if (seek?.dataset.seeking) return;
   const cur = container.querySelector("[data-cur]");
   const total = container.querySelector("[data-total]");
-  const seek = container.querySelector("[data-seek]");
   if (cur) cur.textContent = formatTime(elapsed);
   if (total) total.textContent = formatTime(duration);
   if (seek) {
@@ -71,10 +72,20 @@ function updateProgress(container, elapsed, duration) {
 function bindSeek(container, actions) {
   const seek = container.querySelector("[data-seek]");
   if (!seek) return;
+  seek.addEventListener("pointerdown", () => {
+    seek.dataset.seeking = "1";
+  });
+  const endSeek = () => {
+    delete seek.dataset.seeking;
+  };
+  seek.addEventListener("pointerup", endSeek);
+  seek.addEventListener("pointercancel", endSeek);
+  seek.addEventListener("blur", endSeek);
   seek.addEventListener("input", () => {
     const duration = Number(seek.dataset.duration || 0);
     const elapsed = (Number(seek.value) / 1000) * duration;
-    updateProgress(container, elapsed, duration);
+    const cur = container.querySelector("[data-cur]");
+    if (cur) cur.textContent = formatTime(elapsed);
   });
   seek.addEventListener("change", () => {
     const duration = Number(seek.dataset.duration || 0);

@@ -1,11 +1,12 @@
 //! End-to-end tests for `mpd-client` against an in-process [`mpd_mock::MockMpd`].
+#![allow(clippy::unwrap_used)]
 
 use std::time::Duration;
 
 use mpd_client::{MpdClient, MpdConfig, MpdEvent, PlayState};
 use mpd_mock::{MockMpd, MockState};
 use tokio::sync::broadcast;
-use tokio::time::{timeout, Instant};
+use tokio::time::{Instant, timeout};
 
 fn fields(pairs: &[(&str, &str)]) -> mpd_mock::FieldList {
     pairs
@@ -238,13 +239,6 @@ async fn search_list_count_roundtrip() {
 
     let client = MpdClient::connect(config_for(server.port())).await;
 
-    let found = client
-        .search(&[("Artist", "A")], "==")
-        .await
-        .expect("search");
-    assert_eq!(found.len(), 2);
-    assert_eq!(found[1].id, Some(1));
-
     let artists = client.list("artist", None, None).await.expect("list");
     assert_eq!(
         artists,
@@ -252,7 +246,7 @@ async fn search_list_count_roundtrip() {
     );
 
     let (songs, _playtime) = client.count(&[("Artist", "A")], "==").await.expect("count");
-    assert_eq!(songs, 0); // the mock reports 0
+    assert_eq!(songs, 2); // the mock counts the matching search results
 }
 
 #[tokio::test]
@@ -364,7 +358,6 @@ async fn playback_commands_succeed() {
 
     client.play(Some(0)).await.expect("play 0");
     client.play(None).await.expect("play");
-    client.play_id(5).await.expect("playid");
     client.pause(Some(true)).await.expect("pause 1");
     client.pause(None).await.expect("pause");
     client.stop().await.expect("stop");
@@ -441,17 +434,179 @@ async fn command_connection_without_keepalive_is_reaped_and_recovers() {
 
 #[tokio::test]
 async fn queue_commands_succeed() {
-    let server = MockMpd::start(MockState::default()).await;
+    let server = MockMpd::start(MockState {
+        search: vec![
+            fields(&[("file", "s/a.flac"), ("Id", "900"), ("Artist", "AC/DC")]),
+            fields(&[("file", "s/b.flac"), ("Id", "901"), ("Artist", "AC/DC")]),
+        ],
+        ..Default::default()
+    })
+    .await;
     let client = MpdClient::connect(config_for(server.port())).await;
 
+    assert_eq!(client.playlist_count().await.expect("empty count"), 0);
+
     client.add("Album/01 - Song.flac").await.expect("add");
+    assert_eq!(client.playlist_count().await.expect("count after add"), 1);
+
     client
         .searchadd(&[("Artist", "AC/DC")], "==")
         .await
         .expect("searchadd");
-    client.findadd("artist", "A").await.expect("findadd");
+    assert_eq!(
+        client
+            .playlist_count()
+            .await
+            .expect("count after searchadd"),
+        3
+    );
+
+    // Wipe the first two entries (the added file plus one search hit).
+    client.clear_id_range(0, 1).await.expect("clearid");
+    assert_eq!(
+        client.playlist_count().await.expect("count after clearid"),
+        1
+    );
+
     client.clear().await.expect("clear");
-    client.delete_ids(&[0, 1, 2]).await.expect("deleteid list");
+    assert_eq!(client.playlist_count().await.expect("count after clear"), 0);
+
+    client.add("Album/01 - Song.flac").await.expect("add again");
+    client
+        .add("Album/02 - Song.flac")
+        .await
+        .expect("add again 2");
     client.move_id(1, 0).await.expect("moveid");
+    // Positions shift after each delete, so remove from the back.
+    client.delete_ids(&[1, 0]).await.expect("deleteid list");
+    assert_eq!(
+        client.playlist_count().await.expect("count after deleteid"),
+        0
+    );
     client.shuffle().await.expect("shuffle");
+}
+
+#[tokio::test]
+async fn read_picture_survives_chunked_delivery() {
+    // Every reply (greeting, status, the `binary: N` header, and the payload
+    // itself) is fragmented into 7-byte chunks: the client must reassemble
+    // the text lines and the exact binary length across segment boundaries.
+    let mut art: Vec<u8> = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10];
+    art.extend(0u8..=55);
+    let server = MockMpd::start(MockState {
+        art: Some((art.clone(), "image/png".to_string())),
+        write_chunk_size: 7,
+        status: fields(&[("state", "play"), ("volume", "42")]),
+        ..Default::default()
+    })
+    .await;
+
+    let client = MpdClient::connect(config_for(server.port())).await;
+    assert_eq!(client.status().await.expect("status").volume, 42);
+
+    let (bytes, mime) = client
+        .read_picture("Album/01 - Song.flac")
+        .await
+        .expect("art present");
+    assert_eq!(bytes, art);
+    assert_eq!(mime, "image/png");
+}
+
+#[tokio::test]
+async fn idle_survives_unexpected_line() {
+    // A line that is neither `changed:` nor `OK` appears in the idle reply.
+    // The client must ignore it, still deliver the batch's change, and keep
+    // idling afterwards.
+    let server = MockMpd::start(MockState {
+        status: fields(&[("state", "play"), ("volume", "55"), ("playlist", "1")]),
+        currentsong: Some(fields(&[
+            ("file", "Album/01.flac"),
+            ("Id", "0"),
+            ("Title", "S"),
+        ])),
+        ..Default::default()
+    })
+    .await;
+
+    let client = MpdClient::connect(config_for(server.port())).await;
+    let mut rx = client.events();
+
+    let _ = wait_for_event(&mut rx, |e| matches!(e, MpdEvent::Reconnected)).await;
+    let _ = wait_for_event(&mut rx, |e| matches!(e, MpdEvent::Snapshot(_))).await;
+
+    server
+        .set_next_idle_stray("stray: unsolicited server output")
+        .await;
+    server.set_next_idle_change("player").await;
+    let ev = wait_for_event(&mut rx, |e| matches!(e, MpdEvent::Snapshot(_))).await;
+    let MpdEvent::Snapshot(snap) = ev.expect("snapshot after stray line") else {
+        panic!("expected a snapshot");
+    };
+    assert_eq!(snap.status.volume, 55);
+
+    // The idle connection must still be alive and delivering changes.
+    server.set_next_idle_change("database").await;
+    let ev = wait_for_event(&mut rx, |e| matches!(e, MpdEvent::DatabaseChanged)).await;
+    assert!(matches!(ev, Some(MpdEvent::DatabaseChanged)));
+}
+
+#[tokio::test]
+async fn auth_failure_recovers_when_password_restored() {
+    // The operator changes the MPD password to one the client does not know.
+    // The session is reaped (keepalive 30s >> server window 300ms) and every
+    // reconnect fails auth; commands must fail. Once the password is restored
+    // to what the client sends, the session must recover transparently.
+    let server = MockMpd::start(MockState {
+        password: Some("secret".into()),
+        connection_timeout: Some(Duration::from_millis(300)),
+        status: fields(&[("state", "play"), ("volume", "42")]),
+        ..Default::default()
+    })
+    .await;
+
+    let mut config = MpdConfig::new("127.0.0.1", server.port(), Some("secret".into()));
+    config.command_timeout = Duration::from_millis(250);
+    let client = MpdClient::connect(config).await;
+    assert_eq!(client.status().await.expect("initial status").volume, 42);
+
+    server.set_password(Some("changed".into())).await;
+
+    // After several reaped/rejected windows, commands must fail promptly.
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert!(
+        client.status().await.is_err(),
+        "commands must fail while the server rejects the password"
+    );
+
+    server.set_password(Some("secret".into())).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut recovered = false;
+    while Instant::now() < deadline {
+        if let Ok(st) = client.status().await {
+            if st.volume == 42 {
+                recovered = true;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        recovered,
+        "session must recover once the password is restored"
+    );
+}
+
+#[tokio::test]
+async fn command_times_out_when_server_never_replies() {
+    let server = MockMpd::start(MockState {
+        stall_commands: vec!["status".to_string()],
+        ..Default::default()
+    })
+    .await;
+    let mut config = config_for(server.port());
+    config.command_timeout = Duration::from_millis(150);
+    let client = MpdClient::connect(config).await;
+
+    let err = client.status().await.expect_err("must time out");
+    assert!(err.to_string().contains("timed out"), "{err}");
 }

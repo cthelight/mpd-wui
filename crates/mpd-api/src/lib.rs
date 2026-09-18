@@ -14,8 +14,8 @@ mod ws;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::routing::{get, post};
 use axum::Router;
+use axum::routing::{get, post};
 
 use mpd_client::{MpdClient, MpdEvent};
 
@@ -34,11 +34,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(client: MpdClient, cache_ttl: Duration) -> Self {
+    pub fn new(client: MpdClient, library_ttl: Duration) -> Self {
         Self {
             client,
-            cache: Arc::new(Cache::new(cache_ttl)),
-            library: Arc::new(LibraryStore::new(cache_ttl)),
+            cache: Arc::new(Cache::new()),
+            library: Arc::new(LibraryStore::new(library_ttl)),
         }
     }
 }

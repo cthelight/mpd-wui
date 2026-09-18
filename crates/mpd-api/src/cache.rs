@@ -1,6 +1,10 @@
-//! Small in-memory TTL cache for API responses and proxied album art.
+//! Small in-memory TTL cache for proxied album art.
+//!
+//! Entries are evicted on TTL expiry or, once the entry cap is reached, least
+//! recently used first — a library's distinct album count is small, so the cap
+//! mostly guards against pathological churn.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -22,73 +26,112 @@ struct Entry {
     expires: Instant,
 }
 
+/// Entry cap; beyond it the least recently used entries are evicted.
+const MAX_ENTRIES: usize = 512;
+const ART_TTL: Duration = Duration::from_secs(3600);
+
 pub struct Cache {
-    library_ttl: Duration,
-    art_ttl: Duration,
-    entries: Mutex<HashMap<String, Entry>>,
+    entries: Mutex<Entries>,
 }
 
-impl Cache {
-    pub fn new(library_ttl: Duration) -> Self {
-        Self {
-            library_ttl,
-            art_ttl: Duration::from_secs(3600),
-            entries: Mutex::new(HashMap::new()),
+/// LRU state: the entries plus their access order (back = most recently used).
+#[derive(Default)]
+struct Entries {
+    map: HashMap<String, Entry>,
+    order: VecDeque<String>,
+}
+
+impl Entries {
+    /// Move `key` to the most-recently-used end.
+    fn touch(&mut self, key: &str) {
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(key.to_string());
+    }
+
+    /// Remove `key` from both the map and the order list.
+    fn remove(&mut self, key: &str) {
+        if self.map.remove(key).is_some() {
+            if let Some(pos) = self.order.iter().position(|k| k == key) {
+                self.order.remove(pos);
+            }
         }
     }
 
-    pub fn get_library(&self, key: &str) -> Option<CacheHit> {
-        self.get(key)
+    /// Evict least recently used entries until the cap is met.
+    fn evict_to_cap(&mut self) {
+        while self.order.len() > MAX_ENTRIES {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::new(Entries::default()),
+        }
+    }
+}
+
+impl Cache {
+    pub fn new() -> Self {
+        Self::default()
     }
 
+    /// A cached art hit, or `None` when absent or expired.
     pub fn get_art(&self, key: &str) -> Option<CacheHit> {
-        self.get(key)
-    }
-
-    pub fn store_library(&self, key: &str, value: Bytes) -> CacheHit {
-        self.store(key, value, None, self.library_ttl)
-    }
-
-    pub fn store_art(&self, key: &str, value: Bytes, mime: &str) -> CacheHit {
-        self.store(key, value, Some(mime.to_string()), self.art_ttl)
-    }
-
-    /// Drop every entry (used when the MPD database changes).
-    pub fn clear(&self) {
-        self.entries.lock().expect("cache lock poisoned").clear();
-    }
-
-    fn get(&self, key: &str) -> Option<CacheHit> {
         let mut entries = self.entries.lock().expect("cache lock poisoned");
-        let entry = entries.get(key)?;
+        let entry = entries.map.get(key)?;
         if Instant::now() >= entry.expires {
             entries.remove(key);
             return None;
         }
-        Some(CacheHit {
+        let hit = CacheHit {
             value: entry.value.clone(),
             etag: entry.etag.clone(),
             mime: entry.mime.clone(),
-        })
+        };
+        entries.touch(key);
+        Some(hit)
     }
 
-    fn store(&self, key: &str, value: Bytes, mime: Option<String>, ttl: Duration) -> CacheHit {
+    /// Store art under `key`, evicting least recently used entries past the
+    /// cap when the key is new.
+    pub fn store_art(&self, key: &str, value: Bytes, mime: &str) -> CacheHit {
         let etag = etag_for(&value);
         let hit = CacheHit {
             value: value.clone(),
             etag: etag.clone(),
-            mime: mime.clone(),
+            mime: Some(mime.to_string()),
         };
-        self.entries.lock().expect("cache lock poisoned").insert(
+        let mut entries = self.entries.lock().expect("cache lock poisoned");
+        if entries.map.contains_key(key) {
+            entries.touch(key);
+        } else {
+            entries.order.push_back(key.to_string());
+            entries.evict_to_cap();
+        }
+        entries.map.insert(
             key.to_string(),
             Entry {
                 value,
                 etag,
-                mime,
-                expires: Instant::now() + ttl,
+                mime: Some(mime.to_string()),
+                expires: Instant::now() + ART_TTL,
             },
         );
         hit
+    }
+
+    /// Drop every entry (used when the MPD database changes).
+    pub fn clear(&self) {
+        let mut entries = self.entries.lock().expect("cache lock poisoned");
+        entries.map.clear();
+        entries.order.clear();
     }
 }
 
@@ -105,45 +148,55 @@ fn etag_for(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
     #[test]
-    fn stores_and_returns_library_hit() {
-        let cache = Cache::new(Duration::from_secs(60));
-        let hit = cache.store_library("k", Bytes::from("v"));
-        assert_eq!(hit.value, Bytes::from("v"));
-        let got = cache.get_library("k").expect("hit");
-        assert_eq!(got.value, Bytes::from("v"));
-        assert_eq!(got.etag, hit.etag);
-        assert!(got.mime.is_none());
-    }
-
-    #[test]
     fn stores_and_returns_art_hit_with_mime() {
-        let cache = Cache::new(Duration::from_secs(60));
+        let cache = Cache::new();
         let hit = cache.store_art("art", Bytes::copy_from_slice(&[1, 2, 3]), "image/png");
         assert_eq!(hit.mime.as_deref(), Some("image/png"));
         let got = cache.get_art("art").expect("hit");
+        assert_eq!(got.value, Bytes::copy_from_slice(&[1, 2, 3]));
+        assert_eq!(got.etag, hit.etag);
         assert_eq!(got.mime.as_deref(), Some("image/png"));
     }
 
     #[test]
     fn expires_entries_after_ttl() {
-        let cache = Cache::new(Duration::from_millis(1));
-        cache.store_library("k", Bytes::from("v"));
-        std::thread::sleep(Duration::from_millis(5));
-        assert!(cache.get_library("k").is_none());
+        let cache = Cache::new();
+        cache.store_art("k", Bytes::copy_from_slice(&[1]), "image/png");
+        // Force expiry by rewriting the entry with a past deadline.
+        let mut entries = cache.entries.lock().expect("cache lock poisoned");
+        let entry = entries.map.get_mut("k").expect("entry present");
+        entry.expires = Instant::now() - Duration::from_secs(1);
+        drop(entries);
+        assert!(cache.get_art("k").is_none());
     }
 
     #[test]
     fn clear_drops_all_entries() {
-        let cache = Cache::new(Duration::from_secs(60));
-        cache.store_library("a", Bytes::from("1"));
-        cache.store_art("b", Bytes::copy_from_slice(&[1]), "image/png");
+        let cache = Cache::new();
+        cache.store_art("a", Bytes::copy_from_slice(&[1]), "image/png");
+        cache.store_art("b", Bytes::copy_from_slice(&[2]), "image/jpeg");
         cache.clear();
-        assert!(cache.get_library("a").is_none());
+        assert!(cache.get_art("a").is_none());
         assert!(cache.get_art("b").is_none());
+    }
+
+    #[test]
+    fn evicts_least_recently_used_past_the_cap() {
+        let cache = Cache::new();
+        for i in 0..MAX_ENTRIES {
+            cache.store_art(&i.to_string(), Bytes::from("v"), "image/png");
+        }
+        // Touch the first entry so "1" becomes the least recently used.
+        assert!(cache.get_art("0").is_some());
+        cache.store_art(&MAX_ENTRIES.to_string(), Bytes::from("v"), "image/png");
+        assert!(cache.get_art("1").is_none(), "LRU entry must be evicted");
+        assert!(cache.get_art("0").is_some());
+        assert!(cache.get_art(&MAX_ENTRIES.to_string()).is_some());
     }
 
     #[test]

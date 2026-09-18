@@ -49,8 +49,18 @@ cargo build --release --locked -p mpd-wui
 | `MPD_PASSWORD` | _(empty)_ | Optional MPD password                |
 | `BIND_ADDR`    | `0.0.0.0` | Address for the web server to bind   |
 | `PORT`         | `8080`    | Port for the web server              |
-| `CACHE_TTL`    | `300`     | Browse/list cache TTL in seconds     |
+| `CACHE_TTL`    | `300`     | Library snapshot TTL in seconds      |
 | `RUST_LOG`     | `info`    | Logging filter                       |
+
+`CACHE_TTL` controls how often the in-process library snapshot (used by
+`/api/search`) is rebuilt; a stale snapshot is served immediately and
+refreshed in the background until it is younger than the TTL. Album art is
+cached separately for a fixed hour.
+
+The web server performs no authentication of its own and binds `0.0.0.0` by
+default. Anyone who can reach the port can control playback and the queue, so
+restrict access with a firewall (or set `BIND_ADDR=127.0.0.1` for local-only
+use) and rely on `MPD_PASSWORD` for the MPD bridge itself.
 
 ## API
 
