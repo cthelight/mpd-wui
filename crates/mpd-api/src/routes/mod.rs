@@ -17,20 +17,6 @@ pub(crate) fn json_body<T>(
         .map_err(|_| crate::error::ApiError::bad_request("invalid JSON body"))
 }
 
-/// Parse an optional non-negative integer query parameter.
-pub(crate) fn parse_u32(
-    params: &std::collections::HashMap<String, String>,
-    key: &str,
-) -> Result<Option<u32>, crate::error::ApiError> {
-    match params.get(key) {
-        Some(value) if !value.is_empty() => value
-            .parse::<u32>()
-            .map(Some)
-            .map_err(|_| crate::error::ApiError::bad_request(format!("{key} must be an integer"))),
-        _ => Ok(None),
-    }
-}
-
 /// Non-empty query parameter, if present.
 pub(crate) fn param<'a>(
     params: &'a std::collections::HashMap<String, String>,

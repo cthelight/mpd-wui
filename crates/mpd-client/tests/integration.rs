@@ -142,7 +142,7 @@ async fn playlist_roundtrip() {
     .await;
 
     let client = MpdClient::connect(config_for(server.port())).await;
-    let songs = client.playlist(None, None).await.expect("playlist");
+    let songs = client.playlist().await.expect("playlist");
     assert_eq!(songs.len(), 3);
     assert_eq!(songs[0].file, "a/one.flac");
     assert_eq!(songs[0].id, Some(0));

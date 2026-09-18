@@ -13,8 +13,7 @@ server.
 - Now Playing view with art, transport controls, seek, volume, and playback
   modes
 - Persistent mini-player
-- Paged queue with play, remove, clear, shuffle, drag-to-reorder, and load
-  more
+- Queue with play, remove, clear, shuffle, and drag-to-reorder
 - Library with debounced search, folder browsing, and collections by artist,
   album artist, album, genre, and year
 - Add or play songs, albums, artists, genres, years, and folders into the
@@ -58,7 +57,7 @@ cargo build --release --locked -p mpd-wui
 | Method | Path                                        | Purpose                         |
 | ------ | ------------------------------------------- | ------------------------------- |
 | GET    | `/api/status`                               | Status and current song         |
-| GET    | `/api/playlist?start&end`                   | Paged playlist                  |
+| GET    | `/api/playlist`                             | Full playlist                   |
 | GET    | `/api/browse?path=`                         | Browse a directory              |
 | GET    | `/api/list?type=&artist=&albumartist=`      | List collection values          |
 | GET    | `/api/search?q=&artist=&album=...`          | Search songs                    |

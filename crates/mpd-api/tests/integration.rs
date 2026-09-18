@@ -147,14 +147,6 @@ async fn playlist_returns_songs() {
 }
 
 #[tokio::test]
-async fn playlist_rejects_bad_range() {
-    let (router, _state, _mock) = app().await;
-    let (status, _, body) = call(&router, get("/api/playlist?start=abc")).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(as_json(&body)["error"].is_string());
-}
-
-#[tokio::test]
 async fn browse_returns_directories_and_files() {
     let (router, _, mock) = app().await;
     mock.set_lsinfo(fields(&[

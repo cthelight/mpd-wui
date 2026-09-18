@@ -119,17 +119,11 @@ impl MpdClient {
         Ok(parse_currentsong(&self.cmd("currentsong").await?))
     }
 
-    pub async fn playlist(
-        &self,
-        start: Option<u32>,
-        end: Option<u32>,
-    ) -> anyhow::Result<Vec<Song>> {
-        let cmd = match (start, end) {
-            (Some(s), Some(e)) => format!("playlistinfo {s} {e}"),
-            (Some(s), None) => format!("playlistinfo {s}"),
-            _ => "playlistinfo".to_string(),
-        };
-        Ok(parse_song_list(&self.cmd(&cmd).await?))
+    /// The full playlist. MPD's ranged `playlistinfo start [end]` form is
+    /// rejected by some builds (e.g. 0.23.5 answers
+    /// `too many arguments for "playlistinfo"`), so the range is never sent.
+    pub async fn playlist(&self) -> anyhow::Result<Vec<Song>> {
+        Ok(parse_song_list(&self.cmd("playlistinfo").await?))
     }
 
     pub async fn lsinfo(&self, path: &str) -> anyhow::Result<Browse> {

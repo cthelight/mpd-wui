@@ -293,17 +293,9 @@ input[type="range"] {
 .queue-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   color: var(--fg-dim);
 }
-.load-more {
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  color: var(--fg-dim);
-}
-.load-more:hover { color: var(--fg); border-color: var(--accent); }
 
 .library-search .search-box {
   display: flex;

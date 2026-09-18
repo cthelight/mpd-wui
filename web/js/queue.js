@@ -1,9 +1,7 @@
-// Queue view: paged rows, drag-to-reorder, click-to-play, remove, clear, shuffle.
+// Queue view: full list, drag-to-reorder, click-to-play, remove, clear, shuffle.
 import { get, post } from "./api.js";
 import { icon } from "./icons.js";
 import { formatTime } from "./nowplaying.js";
-
-const PAGE_SIZE = 50;
 
 function title(song) {
   return song.title || song.file.split("/").pop() || song.file || "Unknown track";
@@ -52,17 +50,14 @@ export function mountQueue(container, state) {
       <ol class="queue-list" data-list></ol>
       <div class="queue-footer">
         <span data-count class="queue-count"></span>
-        <button data-loadmore class="load-more">Load more</button>
       </div>
     </section>
   `;
 
   const list = container.querySelector("[data-list]");
   const count = container.querySelector("[data-count]");
-  const loadMore = container.querySelector("[data-loadmore]");
 
   let songs = [];
-  let total = 0;
   let version = null;
   let refreshToken = 0;
   let dragging = null;
@@ -74,42 +69,18 @@ export function mountQueue(container, state) {
 
   function render() {
     list.innerHTML = songs.map((song, i) => rowHtml(song, i, currentId())).join("");
-    count.textContent = total ? `${songs.length} of ${total} tracks` : `${songs.length} tracks`;
-    loadMore.hidden = songs.length >= total || total === 0;
-  }
-
-  async function fetchPage(start, end) {
-    return get("/playlist", { start, end });
+    count.textContent = `${songs.length} tracks`;
   }
 
   async function refresh() {
     const token = ++refreshToken;
-    songs = [];
-    total = state.snapshot?.status?.songs ?? 0;
-    render();
     try {
-      const page = await fetchPage(0, PAGE_SIZE - 1);
+      const page = await get("/playlist");
       if (token !== refreshToken) return;
       songs = page;
-      if (total === 0) total = page.length;
       render();
     } catch {
       // The next snapshot or manual refresh will retry.
-    }
-  }
-
-  async function loadMoreRows() {
-    const start = songs.length;
-    const end = start + PAGE_SIZE - 1;
-    const token = refreshToken;
-    try {
-      const page = await fetchPage(start, end);
-      if (token !== refreshToken) return;
-      songs = songs.concat(page);
-      if (total < songs.length) total = songs.length;
-      render();
-    } catch {
-      // Ignore; the button remains visible while more rows are expected.
     }
   }
 
@@ -141,7 +112,12 @@ export function mountQueue(container, state) {
 
   container.querySelector("[data-queue-act=shuffle]").addEventListener("click", () => act("shuffle"));
   container.querySelector("[data-queue-act=clear]").addEventListener("click", () => act("clear"));
-  loadMore.addEventListener("click", loadMoreRows);
+
+  // Fetch the whole queue on mount: the app may already hold a snapshot
+  // (from /status or WS), but no new snapshot arrives unless MPD changes,
+  // so an idle MPD would otherwise leave the list empty.
+  version = state.snapshot?.status?.playlist_version ?? null;
+  refresh();
 
   list.addEventListener("dragstart", (event) => {
     const row = event.target.closest(".queue-row");
@@ -186,10 +162,8 @@ export function mountQueue(container, state) {
       const newVersion = snapshot.status.playlist_version;
       if (version === null || newVersion !== version) {
         version = newVersion;
-        total = snapshot.status.songs ?? 0;
         refresh();
       } else {
-        total = snapshot.status.songs ?? total;
         render();
       }
     },
