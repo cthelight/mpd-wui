@@ -69,12 +69,32 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::select! {
         result = axum::serve(listener, app) => result?,
-        _ = tokio::signal::ctrl_c() => {
+        _ = shutdown_signal() => {
             tracing::info!("shutdown signal received");
         }
     }
 
     Ok(())
+}
+
+/// Resolves on SIGINT or SIGTERM.
+///
+/// `docker stop` sends SIGTERM (not SIGINT), so both must be handled for the
+/// container to exit gracefully within its stop grace period instead of being
+/// force-killed.
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to install SIGTERM handler");
+
+    #[cfg(unix)]
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate.recv() => {}
+    }
+    #[cfg(not(unix))]
+    ctrl_c.await.expect("failed to listen for SIGINT");
 }
 
 /// Static assets for the frontend; unknown `/api/` paths get a JSON 404
