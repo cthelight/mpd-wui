@@ -38,6 +38,9 @@ pub struct MockState {
     pub not_commands: Vec<String>,
     /// Expected password, if authentication is required.
     pub password: Option<String>,
+    /// Emulate MPD's `connection_timeout`: close connections that send no
+    /// data within this window. None disables the behavior.
+    pub connection_timeout: Option<std::time::Duration>,
 }
 
 /// A running mock MPD server bound to an ephemeral localhost port.
@@ -136,6 +139,7 @@ async fn handle_conn(stream: TcpStream, state: Arc<Mutex<MockState>>) {
     let _ = stream.set_nodelay(true);
     let (r, mut w) = stream.into_split();
     let mut reader = BufReader::new(r);
+    let idle_timeout = state.lock().await.connection_timeout;
 
     let _ = w.write_all(b"OK MPD 0.23.0\n").await;
     let _ = w.flush().await;
@@ -143,9 +147,15 @@ async fn handle_conn(stream: TcpStream, state: Arc<Mutex<MockState>>) {
     let mut line = String::new();
     loop {
         line.clear();
-        let n = match reader.read_line(&mut line).await {
-            Ok(n) => n,
-            Err(_) => break,
+        let read = match idle_timeout {
+            Some(d) => tokio::time::timeout(d, reader.read_line(&mut line)).await,
+            None => Ok(reader.read_line(&mut line).await),
+        };
+        let n = match read {
+            Ok(Ok(n)) => n,
+            // Data arrived too late (idle timeout) or the stream broke:
+            // close, like MPD's `connection_timeout`.
+            Ok(Err(_)) | Err(_) => break,
         };
         if n == 0 {
             break;

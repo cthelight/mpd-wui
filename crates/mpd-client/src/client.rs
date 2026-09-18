@@ -20,6 +20,12 @@ pub struct MpdConfig {
     pub host: String,
     pub port: u16,
     pub password: Option<String>,
+    /// How often the command connection sends a `noop`. MPD closes any
+    /// connection that sends no data within `connection_timeout` (default
+    /// 60s) unless the client is awaiting `idle`; the command connection
+    /// never idles, so without a keepalive MPD reaps it after every
+    /// quiet period.
+    pub keepalive: Duration,
 }
 
 impl MpdConfig {
@@ -28,6 +34,7 @@ impl MpdConfig {
             host: host.into(),
             port,
             password,
+            keepalive: Duration::from_secs(30),
         }
     }
 }
@@ -534,18 +541,35 @@ async fn run_command_session(
         let _ = events.send(MpdEvent::Snapshot(Box::new(s)));
     }
 
-    while let Some(req) = rx.recv().await {
-        match send_one(&mut reader, &mut writer, &req.cmd).await {
-            Ok(text) => {
-                let _ = req.reply.send(Ok(text));
-            }
-            Err(e) => {
-                let _ = req.reply.send(Err(e.clone()));
-                return SessionOutcome::Lost(e);
+    // MPD reaps connections that send no data within `connection_timeout`
+    // (default 60s); only clients awaiting `idle` are exempt. This
+    // connection never idles, so ping it to stay under the limit. A failed
+    // ping also surfaces a dead connection before the user's next command
+    // would.
+    let mut keepalive = tokio::time::interval(config.keepalive);
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    keepalive.tick().await;
+    loop {
+        tokio::select! {
+            req = rx.recv() => match req {
+                Some(req) => match send_one(&mut reader, &mut writer, &req.cmd).await {
+                    Ok(text) => {
+                        let _ = req.reply.send(Ok(text));
+                    }
+                    Err(e) => {
+                        let _ = req.reply.send(Err(e.clone()));
+                        return SessionOutcome::Lost(e);
+                    }
+                },
+                None => return SessionOutcome::Closed,
+            },
+            _ = keepalive.tick() => {
+                if let Err(e) = send_one(&mut reader, &mut writer, "noop").await {
+                    return SessionOutcome::Lost(e);
+                }
             }
         }
     }
-    SessionOutcome::Closed
 }
 
 /// Fetch a fresh status+song snapshot over a fresh command channel (used by the

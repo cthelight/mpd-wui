@@ -379,6 +379,67 @@ async fn playback_commands_succeed() {
 }
 
 #[tokio::test]
+async fn command_keepalive_survives_server_connection_timeout() {
+    // Emulates MPD's `connection_timeout` (default 60s): the server closes
+    // connections that send no data. The command connection only transmits
+    // on `noop` keepalives, so a keepalive shorter than the server window
+    // must keep it alive across several windows.
+    let server = MockMpd::start(MockState {
+        connection_timeout: Some(Duration::from_millis(200)),
+        status: fields(&[("state", "play"), ("volume", "42")]),
+        ..Default::default()
+    })
+    .await;
+
+    let mut config = config_for(server.port());
+    config.keepalive = Duration::from_millis(50);
+    let client = MpdClient::connect(config).await;
+
+    // Four full timeout windows of client silence (broken only by noops).
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    let st = client.status().await.expect("status after quiet period");
+    assert_eq!(st.volume, 42);
+}
+
+#[tokio::test]
+async fn command_connection_without_keepalive_is_reaped_and_recovers() {
+    // Default keepalive (30s) >> server window: the session dies on the
+    // next command, then reconnects transparently.
+    let server = MockMpd::start(MockState {
+        connection_timeout: Some(Duration::from_millis(100)),
+        status: fields(&[("state", "play"), ("volume", "42")]),
+        ..Default::default()
+    })
+    .await;
+
+    let client = MpdClient::connect(config_for(server.port())).await;
+    let mut rx = client.events();
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(
+        client.status().await.is_err(),
+        "command on the reaped connection must fail"
+    );
+    let _ = wait_for_event(&mut rx, |e| matches!(e, MpdEvent::Disconnected)).await;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if client.status().await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        client
+            .status()
+            .await
+            .expect("reconnected session serves status")
+            .volume
+            == 42
+    );
+}
+
+#[tokio::test]
 async fn queue_commands_succeed() {
     let server = MockMpd::start(MockState::default()).await;
     let client = MpdClient::connect(config_for(server.port())).await;
