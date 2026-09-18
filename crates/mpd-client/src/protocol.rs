@@ -276,6 +276,7 @@ pub fn parse_song(fields: &FieldList) -> Song {
         track: opt_str(fields, "Track"),
         genre: opt_str(fields, "Genre"),
         name: opt_str(fields, "Name"),
+        composer: opt_str(fields, "Composer"),
         date: opt_str(fields, "Date"),
         time: opt_str(fields, "Time").and_then(|v| v.parse().ok()),
     }
@@ -422,8 +423,13 @@ fn canonical_tag(tag: &str) -> &str {
     }
 }
 
-/// Build the `searchadd`/`findadd`/`search` filter argument from tag/value pairs.
-/// Uses the MPD >= 0.21 filter syntax: `(Tag op 'value') AND ...`.
+/// Build the `searchadd`/`findadd`/`search`/`count` filter argument from
+/// tag/value pairs.
+///
+/// MPD's filter grammar has no top-level operator: a compound `AND` expression
+/// must itself be wrapped in parentheses, i.e. `((A) AND (B))` — a bare
+/// `(A) AND (B)` is rejected with `ACK ... Unparsed garbage after expression`.
+/// A single clause needs no extra wrapping.
 pub fn build_search_filters(pairs: &[(&str, &str)], op: &str) -> String {
     let mut clauses: Vec<String> = Vec::new();
     for (tag, value) in pairs {
@@ -431,35 +437,10 @@ pub fn build_search_filters(pairs: &[(&str, &str)], op: &str) -> String {
             clauses.push(filter_clause(tag, op, value));
         }
     }
-    if clauses.is_empty() {
-        String::new()
-    } else {
-        clauses.join(" AND ")
-    }
-}
-
-/// Build a free-text search filter: an OR across the common tags for the query
-/// (wrapped in parentheses), then ANDed with any additional `(tag, value)`
-/// `contains` clauses. Empty when there is nothing to search for.
-pub fn build_any_filter(query: Option<&str>, extra: &[(&str, &str)]) -> String {
-    const FREE_TAGS: &[&str] = &["Title", "Artist", "Album", "AlbumArtist", "Genre", "Track"];
-    let mut clauses: Vec<String> = Vec::new();
-    if let Some(q) = query.filter(|q| !q.is_empty()) {
-        let or: Vec<String> = FREE_TAGS
-            .iter()
-            .map(|t| filter_clause(t, "contains", q))
-            .collect();
-        clauses.push(format!("({})", or.join(" OR ")));
-    }
-    for (tag, value) in extra {
-        if !value.is_empty() {
-            clauses.push(filter_clause(tag, "contains", value));
-        }
-    }
     match clauses.len() {
         0 => String::new(),
         1 => clauses.pop().unwrap(),
-        _ => clauses.join(" AND "),
+        _ => format!("({})", clauses.join(" AND ")),
     }
 }
 
@@ -678,38 +659,20 @@ mod tests {
     }
 
     #[test]
-    fn build_search_filters_joins_with_and() {
-        let f = build_search_filters(&[("Artist", "AC/DC"), ("Album", "")], "==");
-        assert_eq!(f, "(Artist == 'AC/DC')");
-        let f2 = build_search_filters(&[("Artist", "A"), ("Album", "B")], "contains");
-        assert_eq!(f2, "(Artist contains 'A') AND (Album contains 'B')");
-    }
-
-    #[test]
-    fn build_any_filter_builds_free_text_or_and_narrowing() {
-        assert_eq!(build_any_filter(None, &[]), "");
+    fn build_search_filters_wraps_compound_and_in_parens() {
+        // A single non-empty clause is sent bare (MPD accepts `(Tag op 'v')`).
         assert_eq!(
-            build_any_filter(Some(""), &[("Artist", "A")]),
-            "(Artist contains 'A')"
+            build_search_filters(&[("Artist", "AC/DC"), ("Album", "")], "=="),
+            "(Artist == 'AC/DC')"
         );
-
-        let f = build_any_filter(Some("s"), &[]);
+        // Two or more clauses must be wrapped: `((A) AND (B))`. A bare
+        // `(A) AND (B)` is rejected by MPD with "Unparsed garbage".
         assert_eq!(
-            f,
-            "((Title contains 's') OR (Artist contains 's') OR (Album contains 's') \
-             OR (AlbumArtist contains 's') OR (Genre contains 's') OR (Track contains 's'))"
+            build_search_filters(&[("Artist", "A"), ("Album", "B")], "contains"),
+            "((Artist contains 'A') AND (Album contains 'B'))"
         );
-
-        let f = build_any_filter(Some("s"), &[("Artist", "a"), ("Album", "")]);
-        assert!(f.starts_with("((Title contains 's') OR"));
-        assert!(f.ends_with(" AND (Artist contains 'a')"));
-    }
-
-    #[test]
-    fn build_any_filter_escapes_query() {
-        let f = build_any_filter(Some("a'b"), &[]);
-        assert!(f.contains("(Title contains 'a\\'b')"));
-        assert!(f.contains("(Track contains 'a\\'b')"));
+        // Empty values are skipped entirely.
+        assert_eq!(build_search_filters(&[("Artist", ""), ("Album", "")], "=="), "");
     }
 
     #[test]

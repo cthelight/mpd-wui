@@ -7,6 +7,8 @@ mod cache;
 mod dto;
 mod error;
 mod routes;
+mod search;
+mod store;
 mod ws;
 
 use std::sync::Arc;
@@ -20,12 +22,15 @@ use mpd_client::{MpdClient, MpdEvent};
 pub use cache::{Cache, CacheHit};
 pub use dto::*;
 pub use error::ApiError;
+pub use store::LibraryStore;
 
 /// Shared application state for the HTTP/WS layer.
 #[derive(Clone)]
 pub struct AppState {
     pub client: MpdClient,
     pub cache: Arc<Cache>,
+    /// In-process copy of the whole library for local (in-process) search.
+    pub library: Arc<LibraryStore>,
 }
 
 impl AppState {
@@ -33,6 +38,7 @@ impl AppState {
         Self {
             client,
             cache: Arc::new(Cache::new(cache_ttl)),
+            library: Arc::new(LibraryStore::new(cache_ttl)),
         }
     }
 }
@@ -72,6 +78,7 @@ pub fn spawn_cache_invalidation(state: AppState) {
         while let Ok(event) = events.recv().await {
             if matches!(event, MpdEvent::DatabaseChanged) {
                 state.cache.clear();
+                state.library.invalidate();
             }
         }
     });

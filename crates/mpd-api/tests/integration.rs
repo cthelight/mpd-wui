@@ -214,6 +214,59 @@ async fn search_exact_returns_songs() {
 }
 
 #[tokio::test]
+async fn search_filters_locally_across_fields_and_tags() {
+    let (router, _, mock) = app().await;
+    mock.set_search(vec![
+        fields(&[
+            ("file", "alpha/one.flac"),
+            ("Artist", "Alpha"),
+            ("Title", "One"),
+            ("Genre", "Jazz"),
+        ]),
+        fields(&[
+            ("file", "beta/two.flac"),
+            ("Artist", "Beta"),
+            ("Title", "Two"),
+            ("Genre", "Rock"),
+        ]),
+        fields(&[
+            ("file", "gamma/blue.flac"),
+            ("Artist", "Gamma"),
+            ("Title", "Blue Album"),
+            ("Genre", "Folk"),
+        ]),
+    ])
+    .await;
+
+    // Free text matches any field (here the artist "Beta").
+    let (status, _, body) = call(&router, get("/api/search?q=beta")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(value.as_array().expect("array").len(), 1);
+    assert_eq!(value[0]["file"], "beta/two.flac");
+
+    // Multi-tag exact constraints are ANDed (the case MPD's filter grammar broke on).
+    let (status, _, body) = call(&router, get("/api/search?genre=rock&title=two")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(as_json(&body).as_array().expect("array").len(), 1);
+
+    // Contradictory exact constraints match nothing.
+    let (status, _, body) = call(&router, get("/api/search?genre=rock&title=one")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(as_json(&body).as_array().expect("array").len(), 0);
+
+    // Free text + exact constraints combine.
+    let (status, _, body) = call(&router, get("/api/search?q=blue&artist=gamma")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(as_json(&body).as_array().expect("array").len(), 1);
+
+    // No query at all returns an empty list (and must not error).
+    let (status, _, body) = call(&router, get("/api/search")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(as_json(&body).as_array().expect("array").len(), 0);
+}
+
+#[tokio::test]
 async fn capabilities_reports_mock_commands() {
     let initial = MockState {
         commands: vec!["play".to_string(), "pause".to_string()],

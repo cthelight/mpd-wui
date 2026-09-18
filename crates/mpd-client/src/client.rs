@@ -9,8 +9,8 @@ use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, oneshot, watch, RwLock};
 
 use crate::protocol::{
-    build_any_filter, build_search_filters, parse_art, parse_currentsong, parse_list, parse_lsinfo,
-    parse_song_list, parse_status, parse_text, quote_arg, sniff_mime, Response,
+    build_search_filters, parse_art, parse_currentsong, parse_list, parse_lsinfo, parse_song_list,
+    parse_status, parse_text, quote_arg, sniff_mime, Response,
 };
 use crate::types::{Browse, Capabilities, MpdEvent, Snapshot, Song, Status};
 
@@ -158,18 +158,15 @@ impl MpdClient {
         Ok(parse_song_list(&self.cmd(&cmd).await?))
     }
 
-    /// Free-text `search` across the common tags, optionally narrowed by extra
-    /// `(tag, value)` `contains` clauses.
-    pub async fn search_any(
-        &self,
-        query: Option<&str>,
-        extra: &[(&str, &str)],
-    ) -> anyhow::Result<Vec<Song>> {
-        let filters = build_any_filter(query, extra);
-        if filters.is_empty() {
-            return Ok(Vec::new());
-        }
-        let cmd = format!("search {}", quote_arg(&filters));
+    /// Dump the entire music database — every song with its full metadata — in
+    /// a single round-trip, for local (in-process) search.
+    ///
+    /// MPD's filter grammar cannot express "match any tag" (there is no `OR`),
+    /// so broad search is done by pulling the whole library and filtering in
+    /// this process. `(File contains '')` matches every song.
+    pub async fn library(&self) -> anyhow::Result<Vec<Song>> {
+        let filters = "(File contains '')";
+        let cmd = format!("search {}", quote_arg(filters));
         Ok(parse_song_list(&self.cmd(&cmd).await?))
     }
 

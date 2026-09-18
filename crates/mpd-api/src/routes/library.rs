@@ -6,6 +6,7 @@ use axum::Json;
 use mpd_client::{Browse, Song};
 
 use crate::error::ApiError;
+use crate::search::{self, Field};
 use crate::AppState;
 
 use super::param;
@@ -50,42 +51,43 @@ pub async fn list(
     Ok(Json(state.client.list(tag, artist, albumartist).await?))
 }
 
+/// Query-string tag params mapped to local search fields (exact-match
+/// constraints, ANDed together).
+const SEARCH_FIELDS: &[(&str, Field)] = &[
+    ("artist", Field::Artist),
+    ("album", Field::Album),
+    ("albumartist", Field::AlbumArtist),
+    ("genre", Field::Genre),
+    ("title", Field::Title),
+    ("composer", Field::Composer),
+    ("date", Field::Date),
+];
+
+/// Local search: pull the whole library into the process (cached by TTL) and
+/// filter it here. MPD's filter grammar has no `OR`, so broad "match any tag"
+/// search can't be done server-side; exact multi-tag search can, but doing
+/// everything locally keeps the two paths uniform and avoids the fragile
+/// filter-syntax edge cases.
 pub async fn search(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<Song>>, ApiError> {
-    let tags: [(&str, &str); 6] = [
-        ("artist", "Artist"),
-        ("album", "Album"),
-        ("albumartist", "AlbumArtist"),
-        ("genre", "Genre"),
-        ("title", "Title"),
-        ("date", "Date"),
-    ];
-    let exact = matches!(
-        param(&params, "exact")
-            .map(|s| s.to_ascii_lowercase())
-            .as_deref(),
-        Some("1" | "true")
-    );
-    if exact {
-        let mut pairs: Vec<(&str, &str)> = Vec::new();
-        for (key, tag) in tags {
-            if let Some(value) = param(&params, key) {
-                pairs.push((tag, value));
-            }
+    let mut query = search::Query::default();
+    if let Some(q) = param(&params, "q") {
+        if !q.trim().is_empty() {
+            query.free_text = Some(q.to_string());
         }
-        return Ok(Json(state.client.search(&pairs, "==").await?));
     }
-
-    let query = param(&params, "q");
-    let mut extra: Vec<(&str, &str)> = Vec::new();
-    for (key, tag) in tags {
+    for (key, field) in SEARCH_FIELDS {
         if let Some(value) = param(&params, key) {
-            extra.push((tag, value));
+            query.exact.push((*field, value.to_string()));
         }
     }
-    Ok(Json(state.client.search_any(query, &extra).await?))
+    if query.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let library = state.library.get(&state.client).await?;
+    Ok(Json(search::filter(&library, &query)))
 }
 
 #[cfg(test)]

@@ -67,6 +67,8 @@ pub struct Song {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub composer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<String>,
     /// Track length in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
