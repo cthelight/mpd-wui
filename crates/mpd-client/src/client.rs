@@ -394,6 +394,13 @@ impl MpdClient {
     }
 
     pub async fn capabilities(&self) -> Capabilities {
+        let caps = self.caps.read().await.clone();
+        if !caps.commands.is_empty() {
+            return caps;
+        }
+        // Force the serialized command connection to complete its startup
+        // handshake (which fetches `commands`) before reading again.
+        let _ = self.cmd("noop").await;
         self.caps.read().await.clone()
     }
 }

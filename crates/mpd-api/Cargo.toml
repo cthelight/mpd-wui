@@ -17,3 +17,5 @@ futures-util = { workspace = true }
 
 [dev-dependencies]
 mpd-mock = { path = "../mpd-mock" }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = { workspace = true }

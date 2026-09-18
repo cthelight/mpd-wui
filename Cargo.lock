@@ -435,11 +435,13 @@ dependencies = [
  "anyhow",
  "axum",
  "futures-util",
+ "http-body-util",
  "mpd-client",
  "mpd-mock",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
 ]
 
