@@ -25,7 +25,14 @@ pub async fn browse(
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<Browse>, ApiError> {
     let path = params.get("path").map(String::as_str).unwrap_or("");
-    Ok(Json(state.client.lsinfo(path).await?))
+    Ok(Json(state.client.lsinfo(normalize_browse_path(path)).await?))
+}
+
+/// MPD treats a leading `/` as an absolute filesystem path (which it rejects
+/// with `Access denied`); browse paths are relative to the music root, so strip
+/// any leading slashes.
+fn normalize_browse_path(path: &str) -> &str {
+    path.trim_start_matches('/')
 }
 
 pub async fn list(
@@ -79,4 +86,18 @@ pub async fn search(
         }
     }
     Ok(Json(state.client.search_any(query, &extra).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_browse_path;
+
+    #[test]
+    fn normalize_strips_leading_slash() {
+        assert_eq!(normalize_browse_path(""), "");
+        assert_eq!(normalize_browse_path("/"), "");
+        assert_eq!(normalize_browse_path("/Band"), "Band");
+        assert_eq!(normalize_browse_path("///Band"), "Band");
+        assert_eq!(normalize_browse_path("Band/Album"), "Band/Album");
+    }
 }

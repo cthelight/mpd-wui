@@ -54,17 +54,26 @@ async fn wait_for_caps(client: &MpdClient) -> mpd_client::Capabilities {
 #[tokio::test]
 async fn status_and_currentsong_roundtrip() {
     let server = MockMpd::start(MockState {
+        // Realistic MPD 0.23.x `status` response (see MPD source
+        // src/command/PlayerCommands.cxx): `time` is `<elapsed>:<total>`,
+        // playlist length is `playlistlength`, crossfade is `xfade`.
         status: fields(&[
-            ("state", "play"),
-            ("time", "214"),
-            ("elapsed", "42.5"),
             ("volume", "70"),
-            ("random", "0"),
             ("repeat", "1"),
+            ("random", "0"),
             ("single", "0"),
             ("consume", "0"),
-            ("crossfade", "0"),
+            ("partition", "default"),
             ("playlist", "7"),
+            ("playlistlength", "3"),
+            ("mixrampdb", "0"),
+            ("state", "play"),
+            ("xfade", "3"),
+            ("song", "0"),
+            ("songid", "0"),
+            ("time", "42:214"),
+            ("elapsed", "42.5"),
+            ("bitrate", "320"),
         ]),
         currentsong: Some(fields(&[
             ("file", "Album/01 - Song.flac"),
@@ -84,12 +93,14 @@ async fn status_and_currentsong_roundtrip() {
 
     let st = client.status().await.expect("status");
     assert_eq!(st.state, PlayState::Play);
-    assert_eq!(st.time, 214);
+    assert_eq!(st.time, 214, "time must be the total after the colon");
     assert!((st.elapsed - 42.5).abs() < 0.01);
     assert_eq!(st.volume, 70);
     assert!(st.repeat);
     assert!(!st.random);
     assert_eq!(st.playlist_version, 7);
+    assert_eq!(st.songs, 3, "playlistlength must map to songs");
+    assert_eq!(st.crossfade, 3, "xfade must map to crossfade");
 
     let song = client.currentsong().await.expect("currentsong");
     let song = song.expect("a current song");
@@ -183,13 +194,44 @@ async fn lsinfo_browse_roundtrip() {
 }
 
 #[tokio::test]
+async fn lsinfo_browse_real_mpd_no_per_dir_counts() {
+    // MPD 0.23.x `lsinfo` emits only `directory:` + `Last-Modified:` for
+    // directories (no songcount/playtime). The listing totals must be None.
+    let server = MockMpd::start(MockState {
+        lsinfo: fields(&[
+            ("directory", "Band"),
+            ("Last-Modified", "1700000000"),
+            ("directory", "Other"),
+            ("Last-Modified", "1700000001"),
+            ("file", "loose.flac"),
+            ("Title", "Loose"),
+            ("Artist", "X"),
+            ("Time", "60"),
+        ]),
+        ..Default::default()
+    })
+    .await;
+
+    let client = MpdClient::connect(config_for(server.port())).await;
+    let b = client.lsinfo("/").await.expect("lsinfo");
+    assert_eq!(b.directories.len(), 2);
+    assert_eq!(b.directories[0].path, "Band");
+    assert_eq!(b.directories[0].songcount, None);
+    assert_eq!(b.directories[0].playtime, None);
+    assert_eq!(b.files.len(), 1);
+    assert_eq!(b.songcount, None);
+    assert_eq!(b.playtime, None);
+}
+
+#[tokio::test]
 async fn search_list_count_roundtrip() {
     let server = MockMpd::start(MockState {
         search: vec![
             fields(&[("file", "a/one.flac"), ("Id", "0"), ("Artist", "A")]),
             fields(&[("file", "a/two.flac"), ("Id", "1"), ("Artist", "A")]),
         ],
-        list: fields(&[("artist", "A"), ("artist", "B"), ("artist", "C")]),
+        // Real MPD `list artist` replies with the capitalized `Artist:` key.
+        list: fields(&[("Artist", "A"), ("Artist", "B"), ("Artist", "C")]),
         ..Default::default()
     })
     .await;

@@ -295,18 +295,32 @@ pub fn parse_status(resp: &Response) -> Status {
     };
     Status {
         state: PlayState::from(resp.get("state").unwrap_or("stop")),
-        time: uint_of("time"),
+        // MPD reports the track as `time: <elapsed>:<total>` seconds; take the
+        // total (the value after the colon).
+        time: resp.get("time").map(status_time_total).unwrap_or(0),
         elapsed,
         volume: uint_of("volume"),
         random: bool_of("random"),
         repeat: bool_of("repeat"),
         single: bool_of("single"),
         consume: bool_of("consume"),
-        crossfade: uint_of("crossfade"),
+        // The wire field is `xfade`, not `crossfade`.
+        crossfade: uint_of("xfade"),
         playlist_version: uint_of("playlist"),
-        songs: uint_of("songs"),
+        // The playlist length is reported as `playlistlength`, not `songs`.
+        songs: uint_of("playlistlength"),
         updating,
     }
+}
+
+/// Extract the total track length from MPD's `time: <elapsed>:<total>` field.
+/// Falls back to the whole value when no colon is present.
+fn status_time_total(v: &str) -> u32 {
+    v.rsplit_once(':')
+        .map(|(_, total)| total)
+        .unwrap_or(v)
+        .parse()
+        .unwrap_or(0)
 }
 
 /// Parse `currentsong` into an optional [`Song`] (None when the playlist is empty).
@@ -331,13 +345,21 @@ pub fn parse_lsinfo(resp: &Response) -> Browse {
     let mut files = Vec::new();
     let mut total_songs: u32 = 0;
     let mut total_playtime: u32 = 0;
+    let mut songs_known = true;
+    let mut playtime_known = true;
 
     for item in items {
         if item.iter().any(|(k, _)| k == "directory") {
             let songcount = opt_str(&item, "songcount").and_then(|v| v.parse().ok());
             let playtime = opt_str(&item, "playtime").and_then(|v| v.parse().ok());
-            total_songs += songcount.unwrap_or(0);
-            total_playtime += playtime.unwrap_or(0);
+            match songcount {
+                Some(c) => total_songs += c,
+                None => songs_known = false,
+            }
+            match playtime {
+                Some(p) => total_playtime += p,
+                None => playtime_known = false,
+            }
             directories.push(DirEntry {
                 path: opt_str(&item, "directory").unwrap_or_default(),
                 is_dir: true,
@@ -348,7 +370,10 @@ pub fn parse_lsinfo(resp: &Response) -> Browse {
         } else if item.iter().any(|(k, _)| k == "file") {
             let song = Some(parse_song(&item));
             total_songs += 1;
-            total_playtime += song.as_ref().and_then(|s| s.time).unwrap_or(0);
+            match song.as_ref().and_then(|s| s.time) {
+                Some(t) => total_playtime += t,
+                None => playtime_known = false,
+            }
             files.push(DirEntry {
                 path: song.as_ref().map(|s| s.file.clone()).unwrap_or_default(),
                 is_dir: false,
@@ -361,14 +386,40 @@ pub fn parse_lsinfo(resp: &Response) -> Browse {
     Browse {
         directories,
         files,
-        songcount: Some(total_songs),
-        playtime: Some(total_playtime),
+        // MPD's `lsinfo` only reports per-directory `songcount`/`playtime` when
+        // it can; if any directory omits them the true total is unknown, so we
+        // report None rather than a misleading partial sum.
+        songcount: songs_known.then_some(total_songs),
+        playtime: playtime_known.then_some(total_playtime),
     }
 }
 
 /// Parse a `list` command into the values for a single tag (e.g. `artist`).
+///
+/// MPD replies with the canonical (capitalized) tag name, e.g. `Artist: X`,
+/// so the lookup key is normalized before reading the response.
 pub fn parse_list(resp: &Response, tag: &str) -> Vec<String> {
-    resp.get_all(tag).iter().map(|s| s.to_string()).collect()
+    resp.get_all(canonical_tag(tag))
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Map a tag name to MPD's canonical (capitalized) response field name.
+fn canonical_tag(tag: &str) -> &str {
+    let lower = tag.to_ascii_lowercase();
+    match lower.as_str() {
+        "artist" => "Artist",
+        "albumartist" => "AlbumArtist",
+        "album" => "Album",
+        "title" => "Title",
+        "track" => "Track",
+        "name" => "Name",
+        "genre" => "Genre",
+        "date" => "Date",
+        "composer" => "Composer",
+        _ => tag,
+    }
 }
 
 /// Build the `searchadd`/`findadd`/`search` filter argument from tag/value pairs.
@@ -422,7 +473,7 @@ mod tests {
 
     #[test]
     fn parse_simple_status() {
-        let raw = "volume: 50\nrandom: 0\nrepeat: 1\nsingle: 0\nconsume: 0\nstate: play\ncrossfade: 0\nplaylist: 7\nsongs: 3\ntime: 245\nelapsed: 12.5\nOK\n";
+        let raw = "volume: 50\nrandom: 0\nrepeat: 1\nsingle: 0\nconsume: 0\nstate: play\nxfade: 0\nplaylist: 7\nplaylistlength: 3\ntime: 12:245\nelapsed: 12.5\nOK\n";
         let r = parse_text(raw);
         assert!(r.ack.is_none());
         let s = parse_status(&r);
@@ -434,6 +485,75 @@ mod tests {
         assert_eq!(s.songs, 3);
         assert_eq!(s.time, 245);
         assert!((s.elapsed - 12.5).abs() < 1e-6);
+    }
+
+    /// A realistic `status` response from MPD 0.23.x (playing): `time` is
+    /// `<elapsed>:<total>`, the playlist length is `playlistlength`, and the
+    /// crossfade field is `xfade`.
+    #[test]
+    fn parse_status_mpd_023_wire_format() {
+        let raw = concat!(
+            "volume: 100\n",
+            "repeat: 0\n",
+            "random: 0\n",
+            "single: 0\n",
+            "consume: 1\n",
+            "partition: default\n",
+            "playlist: 843\n",
+            "playlistlength: 5\n",
+            "mixrampdb: 0\n",
+            "state: play\n",
+            "xfade: 5\n",
+            "song: 2\n",
+            "songid: 17\n",
+            "time: 42:229\n",
+            "elapsed: 42.123\n",
+            "bitrate: 320\n",
+            "OK\n",
+        );
+        let r = parse_text(raw);
+        let s = parse_status(&r);
+        assert_eq!(s.state, crate::types::PlayState::Play);
+        assert_eq!(s.songs, 5, "playlistlength must map to songs");
+        assert_eq!(s.time, 229, "time must be the total (after the colon)");
+        assert!((s.elapsed - 42.123).abs() < 1e-3);
+        assert_eq!(s.crossfade, 5, "xfade must map to crossfade");
+        assert_eq!(s.playlist_version, 843);
+        assert!(s.consume);
+    }
+
+    #[test]
+    fn parse_status_time_without_playing_is_zero() {
+        // When stopped MPD omits `time`/`elapsed` entirely.
+        let raw = "volume: 100\nstate: stop\nplaylist: 843\nplaylistlength: 0\nOK\n";
+        let s = parse_status(&parse_text(raw));
+        assert_eq!(s.state, crate::types::PlayState::Stop);
+        assert_eq!(s.time, 0);
+        assert_eq!(s.elapsed, 0.0);
+        assert_eq!(s.songs, 0);
+    }
+
+    #[test]
+    fn parse_list_reads_canonical_capitalized_tag() {
+        // MPD `list artist` replies `Artist: X` (capitalized), not `artist: X`.
+        let raw = "Artist: A\nArtist: B\nArtist: C\nOK\n";
+        let r = parse_text(raw);
+        assert_eq!(
+            parse_list(&r, "artist"),
+            vec!["A".to_string(), "B".to_string(), "C".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_list_reads_other_canonical_tags() {
+        let raw = "Album: X\nAlbum: Y\nOK\n";
+        let r = parse_text(raw);
+        assert_eq!(
+            parse_list(&r, "album"),
+            vec!["X".to_string(), "Y".to_string()]
+        );
+        let raw2 = "Genre: Jazz\nOK\n";
+        assert_eq!(parse_list(&parse_text(raw2), "genre"), vec!["Jazz".to_string()]);
     }
 
     #[test]
@@ -502,6 +622,43 @@ mod tests {
         );
         assert_eq!(b.songcount, Some(16)); // 10 + 5 + 1 loose file
         assert_eq!(b.playtime, Some(3660)); // 2400 + 1200 + 60
+    }
+
+    /// MPD 0.23.x `lsinfo` does not emit `songcount`/`playtime` for
+    /// directories (only `directory:` + `Last-Modified:`). The listing totals
+    /// must then be `None`, not a misleading partial count of loose files.
+    #[test]
+    fn parse_lsinfo_totals_none_when_directories_lack_counts() {
+        let raw = concat!(
+            "directory: Band\n",
+            "Last-Modified: 1700000000\n",
+            "directory: Other\n",
+            "Last-Modified: 1700000001\n",
+            "file: loose.flac\n",
+            "Title: Loose\n",
+            "Artist: X\n",
+            "Time: 60\n",
+            "OK\n",
+        );
+        let r = parse_text(raw);
+        let b = parse_lsinfo(&r);
+        assert_eq!(b.directories.len(), 2);
+        assert_eq!(b.directories[0].songcount, None);
+        assert_eq!(b.directories[0].playtime, None);
+        assert_eq!(b.files.len(), 1);
+        assert_eq!(b.songcount, None, "total songs unknown when dirs lack counts");
+        assert_eq!(b.playtime, None, "total playtime unknown when dirs lack counts");
+    }
+
+    #[test]
+    fn parse_lsinfo_totals_known_for_only_loose_files() {
+        // With no directories, the totals are exactly the loose files.
+        let raw = "file: a.flac\nTime: 60\nfile: b.flac\nTime: 30\nOK\n";
+        let b = parse_lsinfo(&parse_text(raw));
+        assert_eq!(b.directories.len(), 0);
+        assert_eq!(b.files.len(), 2);
+        assert_eq!(b.songcount, Some(2));
+        assert_eq!(b.playtime, Some(90));
     }
 
     #[test]

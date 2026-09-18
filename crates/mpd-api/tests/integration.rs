@@ -89,10 +89,16 @@ fn as_json(bytes: &axum::body::Bytes) -> Value {
 #[tokio::test]
 async fn status_returns_snapshot() {
     let (router, _, mock) = app().await;
+    // Realistic MPD 0.23.x `status`: `time` is `<elapsed>:<total>`, playlist
+    // length is `playlistlength`, crossfade is `xfade`.
     mock.set_status(fields(&[
         ("state", "play"),
         ("volume", "70"),
         ("playlist", "3"),
+        ("playlistlength", "4"),
+        ("xfade", "2"),
+        ("time", "10:220"),
+        ("elapsed", "10.0"),
     ]))
     .await;
     mock.set_currentsong(Some(fields(&[
@@ -108,6 +114,9 @@ async fn status_returns_snapshot() {
     assert_eq!(value["status"]["state"], "play");
     assert_eq!(value["status"]["volume"], 70);
     assert_eq!(value["status"]["playlist_version"], 3);
+    assert_eq!(value["status"]["songs"], 4, "playlistlength must map to songs");
+    assert_eq!(value["status"]["crossfade"], 2, "xfade must map to crossfade");
+    assert_eq!(value["status"]["time"], 220, "time must be the total after the colon");
     assert_eq!(value["song"]["file"], "a/one.flac");
     assert_eq!(value["song"]["artist"], "A");
 }
@@ -161,7 +170,8 @@ async fn browse_returns_directories_and_files() {
 #[tokio::test]
 async fn list_returns_values_and_validates_type() {
     let (router, _, mock) = app().await;
-    mock.set_list(fields(&[("artist", "A"), ("artist", "B")]))
+    // Real MPD `list artist` replies with the capitalized `Artist:` key.
+    mock.set_list(fields(&[("Artist", "A"), ("Artist", "B")]))
         .await;
 
     let (status, _, body) = call(&router, get("/api/list?type=artist")).await;

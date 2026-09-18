@@ -47,11 +47,16 @@ function songData(song) {
 }
 
 function dirData(entry) {
+  // MPD's `lsinfo` often omits per-directory `songcount`/`playtime`; only show
+  // the subtitle for the values that are actually known (avoid "0 tracks · 0:00").
+  const parts = [];
+  if (entry.songcount != null) parts.push(`${entry.songcount} tracks`);
+  if (entry.playtime != null) parts.push(formatTime(entry.playtime));
   return {
     kind: "dir",
     target: { path: entry.path },
     title: entry.path.split("/").pop() || entry.path,
-    subtitle: `${entry.songcount ?? 0} tracks · ${formatTime(entry.playtime ?? 0)}`,
+    subtitle: parts.join(" · "),
     drill: true,
     path: entry.path,
   };
