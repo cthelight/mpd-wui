@@ -127,9 +127,40 @@ function rowHtml(data, index) {
   `;
 }
 
+// Collections can be very large (an artist with thousands of tracks); render
+// in pages so the DOM is not flooded with thousands of rows at once.
+const PAGE = 200;
+
+function appendShowMore(list, store) {
+  list.querySelector(".show-more")?.remove();
+  const remaining = store.rows.length - store.shown;
+  if (remaining <= 0) return;
+  const button = document.createElement("button");
+  button.className = "show-more";
+  button.type = "button";
+  button.textContent = `Show ${Math.min(PAGE, remaining)} more (${remaining} left)`;
+  button.addEventListener("click", () => {
+    store.shown = Math.min(store.rows.length, store.shown + PAGE);
+    const start = store.shown - PAGE;
+    const html = store.rows
+      .slice(start, store.shown)
+      .map((data, i) => rowHtml(data, start + i))
+      .join("");
+    list.insertAdjacentHTML("beforeend", html);
+    appendShowMore(list, store);
+  });
+  list.appendChild(button);
+}
+
 function setRows(list, store, rows) {
   store.rows = rows;
-  list.innerHTML = rows.length ? rows.map(rowHtml).join("") : `<div class="empty">No results</div>`;
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">No results</div>`;
+    return;
+  }
+  store.shown = Math.min(PAGE, rows.length);
+  list.innerHTML = rows.slice(0, store.shown).map((data, i) => rowHtml(data, i)).join("");
+  appendShowMore(list, store);
 }
 
 function setMessage(list, store, message, className = "empty") {

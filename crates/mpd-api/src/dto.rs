@@ -5,6 +5,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Default)]
 pub struct PlayReq {
     pub position: Option<u32>,
+    pub id: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Default)]

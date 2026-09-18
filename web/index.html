@@ -15,12 +15,16 @@
     <header class="topbar">
       <span class="wordmark">mpd-wui</span>
       <span id="conn" class="conn"></span>
-      <nav class="tabs">
-        <button class="tab" data-view="nowplaying">Now Playing</button>
-        <button class="tab" data-view="queue">Queue</button>
-        <button class="tab" data-view="library">Library</button>
+      <nav class="tabs" role="tablist" aria-label="Views">
+        <button class="tab" data-view="nowplaying" role="tab" aria-selected="true">Now Playing</button>
+        <button class="tab" data-view="queue" role="tab" aria-selected="false">Queue</button>
+        <button class="tab" data-view="library" role="tab" aria-selected="false">Library</button>
       </nav>
     </header>
+    <div id="conn-banner" class="conn-banner" hidden>
+      <span data-banner-msg></span>
+      <button class="retry" data-banner-retry type="button">Retry</button>
+    </div>
     <main id="view" class="view"></main>
     <footer class="minibar" id="minibar"></footer>
   </div>

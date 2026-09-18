@@ -22,15 +22,27 @@ export async function get(path, params, signal) {
   return res.json();
 }
 
+const POST_TIMEOUT_MS = 20000;
+
 export async function post(path, body) {
-  const res = await fetch(config.apiBase + path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-  if (!res.ok) throw await errorFromResponse(res);
-  if (res.status === 204 || res.status === 205) return {};
-  return res.json().catch(() => ({}));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
+  try {
+    const res = await fetch(config.apiBase + path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {}),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw await errorFromResponse(res);
+    if (res.status === 204 || res.status === 205) return {};
+    return res.json().catch(() => ({}));
+  } catch (err) {
+    if (err?.name === "AbortError") throw new Error("Request timed out — MPD may be unreachable");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function artUrl(file) {

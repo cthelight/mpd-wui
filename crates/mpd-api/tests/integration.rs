@@ -376,6 +376,26 @@ async fn playback_endpoints_succeed() {
     }
 }
 
+#[tokio::test]
+async fn play_by_id_targets_stable_playlist_id() {
+    let (router, _state, _mock) = app_with(MockState {
+        playlist: vec![
+            fields(&[("file", "a/one.flac"), ("Id", "10")]),
+            fields(&[("file", "a/two.flac"), ("Id", "11")]),
+        ],
+        ..Default::default()
+    })
+    .await;
+
+    let (status, _, _) = call(&router, post_json("/api/play", &json!({"id": 11}))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, body) = call(&router, get("/api/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(value["song"]["file"], "a/two.flac");
+}
+
 /// The mock never emits `changed: options` in response to an option command,
 /// simulating MPD's idle notification being lost (which happens when the idle
 /// connection is busy fetching a snapshot for a previous change). The route

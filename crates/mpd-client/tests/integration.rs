@@ -462,9 +462,12 @@ async fn queue_commands_succeed() {
     );
 
     // Wipe the first two entries (the added file plus one search hit).
-    client.clear_id_range(0, 1).await.expect("clearid");
+    client.delete_range(0, 1).await.expect("delete range");
     assert_eq!(
-        client.playlist_count().await.expect("count after clearid"),
+        client
+            .playlist_count()
+            .await
+            .expect("count after delete range"),
         1
     );
 
@@ -484,6 +487,25 @@ async fn queue_commands_succeed() {
         0
     );
     client.shuffle().await.expect("shuffle");
+}
+
+#[tokio::test]
+async fn play_id_selects_track() {
+    let server = MockMpd::start(MockState::default()).await;
+    let client = MpdClient::connect(config_for(server.port())).await;
+
+    client.add("Album/01 - One.flac").await.expect("add one");
+    client.add("Album/01 - Two.flac").await.expect("add two");
+    let playlist = client.playlist().await.expect("playlist");
+    let id = playlist[1].id.expect("second entry carries an id");
+
+    client.play_id(id).await.expect("playid");
+    let song = client
+        .currentsong()
+        .await
+        .expect("currentsong")
+        .expect("a song is current");
+    assert_eq!(song.file, "Album/01 - Two.flac");
 }
 
 #[tokio::test]

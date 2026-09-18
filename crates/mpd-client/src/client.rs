@@ -114,8 +114,12 @@ impl MpdClient {
     }
 
     async fn cmd(&self, command: &str) -> anyhow::Result<Response> {
+        tracing::debug!(command = %command, "mpd ->");
         let raw = self.send_raw(command).await?;
         let resp = parse_text(&raw);
+        if let Some(ack) = &resp.ack {
+            tracing::error!(command = %command, ack = %ack, "mpd command failed");
+        }
         resp.check().map_err(|a| anyhow::anyhow!("{a}"))?;
         Ok(resp)
     }
@@ -187,13 +191,13 @@ impl MpdClient {
         Ok((songs, playtime))
     }
 
-    /// Number of songs currently in the playlist (`count playlist`).
+    /// Number of songs currently in the playlist.
+    ///
+    /// Read from `status` (`playlistlength`), not `count playlist`: modern MPD's
+    /// `count` only accepts a filter expression, so the bare `playlist` argument
+    /// is rejected with "Incorrect number of filter arguments".
     pub async fn playlist_count(&self) -> anyhow::Result<u32> {
-        let resp = self.cmd("count playlist").await?;
-        Ok(resp
-            .get("playlist")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0))
+        Ok(self.status().await?.songs)
     }
 
     // -- playback -----------------------------------------------------------
@@ -204,6 +208,12 @@ impl MpdClient {
             None => self.cmd("play").await,
         }
         .map(|_| ())
+    }
+
+    /// Play the track with the given (stable) playlist id. Unlike
+    /// `play <pos>` this is immune to concurrent queue changes.
+    pub async fn play_id(&self, id: u32) -> anyhow::Result<()> {
+        self.cmd(&format!("playid {id}")).await.map(|_| ())
     }
 
     pub async fn pause(&self, state: Option<bool>) -> anyhow::Result<()> {
@@ -282,12 +292,15 @@ impl MpdClient {
         self.cmd("clear").await.map(|_| ())
     }
 
-    /// Remove a positional range from the playlist, `clearid start : end`
-    /// (inclusive). MPD ignores endpoints past the end of the playlist.
-    pub async fn clear_id_range(&self, start: u32, end: u32) -> anyhow::Result<()> {
-        self.cmd(&format!("clearid {start} : {end}"))
-            .await
-            .map(|_| ())
+    /// Remove a positional range from the playlist, `delete start:end`
+    /// (inclusive). MPD clamps endpoints to the playlist length.
+    ///
+    /// Position-based (`delete`) rather than id-based (`clearid`): callers
+    /// remove a contiguous run of positions (the old prefix or the just
+    /// appended suffix), and `delete` is supported by far more MPD builds
+    /// than the id-based `clearid`, which some servers reject as unknown.
+    pub async fn delete_range(&self, start: u32, end: u32) -> anyhow::Result<()> {
+        self.cmd(&format!("delete {start}:{end}")).await.map(|_| ())
     }
 
     pub async fn delete_ids(&self, ids: &[u32]) -> anyhow::Result<()> {

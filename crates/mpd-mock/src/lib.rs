@@ -284,6 +284,13 @@ async fn handle_cmd(
         "status" => {
             let st = state.lock().await;
             write_fields(w, &st.status, chunk).await?;
+            // Real MPD always reports `playlistlength`; mirror it so callers that
+            // read it (e.g. `playlist_count`) observe the live playlist size when
+            // a test has not pinned an explicit value.
+            if !st.status.iter().any(|(k, _)| k == "playlistlength") {
+                let n = st.playlist.len();
+                write_all_chunked(w, format!("playlistlength: {n}\n").as_bytes(), chunk).await?;
+            }
             write_all_chunked(w, b"OK\n", chunk).await?;
         }
         "currentsong" => {
@@ -319,23 +326,26 @@ async fn handle_cmd(
         }
         "count" => {
             let st = state.lock().await;
-            if rest == "playlist" {
-                let n = st.playlist.len();
-                write_all_chunked(
-                    w,
-                    format!("songs: {n}\nplaytime: 0\nplaylist: {n}\n").as_bytes(),
-                    chunk,
-                )
-                .await?;
-            } else {
+            let rest = unquote(rest);
+            if rest.starts_with('(') {
                 // Filtered count: report the number of matching search results.
-                let n = filter_tag(unquote(rest))
+                let n = filter_tag(rest)
                     .map(|t| count_tagged(&st.search, t))
                     .unwrap_or(st.search.len());
                 write_all_chunked(w, format!("songs: {n}\nplaytime: 0\n").as_bytes(), chunk)
                     .await?;
+                write_all_chunked(w, b"OK\n", chunk).await?;
+            } else {
+                // Real MPD's `count` only accepts a filter expression; a bare word
+                // (e.g. `count playlist`) is rejected. Mirror the server so tests
+                // cannot rely on a form real MPD does not support.
+                write_all_chunked(
+                    w,
+                    b"ACK [2@0] {count} Incorrect number of filter arguments\n",
+                    chunk,
+                )
+                .await?;
             }
-            write_all_chunked(w, b"OK\n", chunk).await?;
         }
         "commands" => {
             let st = state.lock().await;
@@ -442,7 +452,7 @@ async fn handle_cmd(
             state.lock().await.playlist.clear();
             write_all_chunked(w, b"OK\n", chunk).await?;
         }
-        "clearid" => {
+        "delete" => {
             let mut st = state.lock().await;
             remove_range(&mut st.playlist, rest);
             write_all_chunked(w, b"OK\n", chunk).await?;
@@ -469,7 +479,32 @@ async fn handle_cmd(
             }
             write_all_chunked(w, b"OK\n", chunk).await?;
         }
-        // play, pause, stop, next, previous, seekcur, setvol, random, repeat,
+        "play" => {
+            let mut st = state.lock().await;
+            if !rest.is_empty() {
+                if let Ok(pos) = rest.trim().parse::<usize>() {
+                    if pos < st.playlist.len() {
+                        st.currentsong = Some(st.playlist[pos].clone());
+                    }
+                }
+            }
+            write_all_chunked(w, b"OK\n", chunk).await?;
+        }
+        "playid" => {
+            let mut st = state.lock().await;
+            if let Ok(id) = rest.trim().parse::<usize>() {
+                let id = id.to_string();
+                if let Some(item) = st
+                    .playlist
+                    .iter()
+                    .find(|item| item.iter().any(|(k, v)| k == "Id" && *v == id))
+                {
+                    st.currentsong = Some(item.clone());
+                }
+            }
+            write_all_chunked(w, b"OK\n", chunk).await?;
+        }
+        // pause, stop, next, previous, seekcur, setvol, random, repeat,
         // single, consume, shuffle, and anything else: accept.
         _ => {
             let _ = rest;

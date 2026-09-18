@@ -24,6 +24,8 @@ const icons = {
     '<path d="M17 3h4v4h-2V6.4l-4.3 4.3-1.4-1.4L17.6 5H17V3zM3 5h4.6l2.5 2.5-1.4 1.4L6.3 7H3V5zm10.2 5.1 1.4-1.4 1.9 1.9L14.6 12l1.4 1.4-1.9 1.9-1.4-1.4-2.5 2.5H3v-2h4.3l2.5-2.5 1.4 1.4z" />',
   grip:
     '<circle cx="9" cy="5.5" r="1.6" /><circle cx="15" cy="5.5" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18.5" r="1.6" /><circle cx="15" cy="18.5" r="1.6" />',
+  up: '<path d="M12 9 6 15l1.4 1.4L12 11.8l4.6 4.6L18 15z" />',
+  down: '<path d="M12 15 6 9l1.4-1.4L12 12.2l4.6-4.6L18 9z" />',
 };
 
 export function icon(name, size = 18) {

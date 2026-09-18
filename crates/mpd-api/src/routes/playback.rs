@@ -14,7 +14,12 @@ pub async fn play(
     body: Result<Json<PlayReq>, JsonRejection>,
 ) -> Result<StatusCode, ApiError> {
     let req = json_body(body)?;
-    state.client.play(req.position).await?;
+    match (req.position, req.id) {
+        // A stable playlist id wins: it cannot be invalidated by a
+        // concurrent queue change the way a positional index can.
+        (_, Some(id)) => state.client.play_id(id).await?,
+        (position, None) => state.client.play(position).await?,
+    }
     let _ = state.client.refresh().await;
     Ok(StatusCode::NO_CONTENT)
 }

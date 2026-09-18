@@ -12,19 +12,23 @@ function artist(song) {
   return song.artist || song.albumartist || "";
 }
 
-function rowHtml(song, index, currentId) {
+function rowHtml(song, index, currentId, total) {
   const isCurrent = currentId != null && song.id == currentId;
   return `
     <li class="queue-row${isCurrent ? " current" : ""}" data-id="${song.id ?? ""}" data-index="${index}">
       <button class="queue-handle" type="button" title="Drag to reorder">${icon("grip", 16)}</button>
       <span class="queue-index">${index + 1}</span>
-      <button class="row-btn" data-row-act="play" title="Play">${icon("play", 16)}</button>
+      <button class="row-btn" data-row-act="play" title="Play" aria-label="Play">${icon("play", 16)}</button>
       <div class="row-meta">
         <span class="row-title" title="${escapeHtml(title(song))}">${escapeHtml(title(song))}</span>
         <span class="row-artist" title="${escapeHtml(artist(song))}">${escapeHtml(artist(song))}</span>
       </div>
       <span class="row-time">${formatTime(song.time)}</span>
-      <button class="row-btn" data-row-act="remove" title="Remove">${icon("trash", 16)}</button>
+      <div class="row-move">
+        <button class="row-btn" data-row-act="up" title="Move up" aria-label="Move up" ${index === 0 ? "disabled" : ""}>${icon("up", 16)}</button>
+        <button class="row-btn" data-row-act="down" title="Move down" aria-label="Move down" ${index === total - 1 ? "disabled" : ""}>${icon("down", 16)}</button>
+        <button class="row-btn" data-row-act="remove" title="Remove" aria-label="Remove">${icon("trash", 16)}</button>
+      </div>
     </li>
   `;
 }
@@ -83,7 +87,7 @@ export function mountQueue(container, state) {
   };
 
   function render() {
-    list.innerHTML = songs.map((song, i) => rowHtml(song, i, currentId())).join("");
+    list.innerHTML = songs.map((song, i) => rowHtml(song, i, currentId(), songs.length)).join("");
     // render() wipes the list; re-home the drop slot and drop any pending target.
     // A live drag re-places the slot on the next dragover.
     list.appendChild(dropSlot);
@@ -112,8 +116,19 @@ export function mountQueue(container, state) {
       if (token !== refreshToken) return;
       songs = page;
       render();
-    } catch {
-      // The next snapshot or manual refresh will retry.
+    } catch (err) {
+      if (token !== refreshToken) return;
+      // With nothing to show, surface the failure; otherwise keep the (stale)
+      // list and let the toast inform the user. Either way the next snapshot
+      // or manual refresh retries.
+      const message = escapeHtml(err?.message || String(err));
+      if (!songs.length) {
+        list.innerHTML = `<div class="error">Failed to load queue: ${message}</div>`;
+        list.appendChild(dropSlot);
+        dropSlot.hidden = true;
+      } else {
+        toast(err?.message || String(err));
+      }
     }
   }
 
@@ -139,13 +154,29 @@ export function mountQueue(container, state) {
     const action = button?.dataset.rowAct;
     if (action === "remove") {
       act("remove", { id });
+    } else if (action === "up") {
+      act("move", { id, to: index - 1 });
+    } else if (action === "down") {
+      act("move", { id, to: index + 1 });
     } else if (action === "play" || !action) {
-      post("/play", { position: index }).catch((err) => toast(err?.message || String(err)));
+      // Prefer the stable playlist id: a positional index can be invalidated
+      // by a concurrent queue change before this request reaches MPD.
+      const rawId = row.dataset.id;
+      const body = rawId !== "" ? { id: Number(rawId) } : { position: index };
+      post("/play", body).catch((err) => toast(err?.message || String(err)));
     }
   });
 
-  container.querySelector("[data-queue-act=shuffle]").addEventListener("click", () => act("shuffle"));
-  container.querySelector("[data-queue-act=clear]").addEventListener("click", () => act("clear"));
+  container
+    .querySelector("[data-queue-act=shuffle]")
+    .addEventListener("click", () => {
+      if (confirm("Shuffle the queue?")) act("shuffle");
+    });
+  container
+    .querySelector("[data-queue-act=clear]")
+    .addEventListener("click", () => {
+      if (confirm("Clear the queue?")) act("clear");
+    });
 
   // Fetch the whole queue on mount: the app may already hold a snapshot
   // (from /status or WS), but no new snapshot arrives unless MPD changes,

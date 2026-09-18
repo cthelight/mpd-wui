@@ -26,22 +26,38 @@ function displayAlbum(song) {
 }
 
 function setArt(container, song) {
-  container.innerHTML = "";
-  const url = artUrl(song?.file);
-  if (!url) {
+  const file = song?.file || "";
+  // Rebuild only when the track actually changes: every command pushes a
+  // fresh snapshot, and re-issuing the albumart request on each one wasted
+  // requests and made the art flicker.
+  if (container._artFile === file) return;
+  container._artFile = file;
+
+  const showPlaceholder = () => {
     container.classList.add("empty");
     container.innerHTML = icon("music", 42);
+  };
+  const url = artUrl(file);
+  if (!url) {
+    showPlaceholder();
     return;
   }
+  // Placeholder up front; swap in the image once it has loaded so a slow
+  // albumart fetch does not flash the empty state.
+  showPlaceholder();
   const img = document.createElement("img");
   img.alt = "";
   img.src = url;
-  img.addEventListener("load", () => container.classList.remove("empty"));
-  img.addEventListener("error", () => {
-    container.classList.add("empty");
-    container.innerHTML = icon("music", 42);
+  img.addEventListener("load", () => {
+    if (container._artFile !== file) return; // a newer track took over
+    container.classList.remove("empty");
+    container.innerHTML = "";
+    container.appendChild(img);
   });
-  container.appendChild(img);
+  img.addEventListener("error", () => {
+    if (container._artFile !== file) return;
+    showPlaceholder();
+  });
 }
 
 function setPlayButton(button, state) {
@@ -66,6 +82,7 @@ function updateProgress(container, elapsed, duration) {
     } else {
       seek.value = "0";
     }
+    seek.setAttribute("aria-valuetext", `${formatTime(elapsed)} of ${formatTime(duration)}`);
   }
 }
 
@@ -178,10 +195,10 @@ export function mountNowPlaying(container, actions) {
         <span class="time" data-total>0:00</span>
       </div>
       <div class="np-controls">
-        <button class="ctl" data-act="previous" title="Previous">${icon("previous", 22)}</button>
-        <button class="ctl primary" data-act="playpause" title="Play">${icon("play", 24)}</button>
-        <button class="ctl" data-act="next" title="Next">${icon("next", 22)}</button>
-        <button class="ctl" data-act="stop" title="Stop">${icon("stop", 20)}</button>
+        <button class="ctl" data-act="previous" title="Previous" aria-label="Previous">${icon("previous", 22)}</button>
+        <button class="ctl primary" data-act="playpause" title="Play" aria-label="Play">${icon("play", 24)}</button>
+        <button class="ctl" data-act="next" title="Next" aria-label="Next">${icon("next", 22)}</button>
+        <button class="ctl" data-act="stop" title="Stop" aria-label="Stop">${icon("stop", 20)}</button>
       </div>
       <div class="np-extra">
         <label class="volume">
@@ -221,9 +238,9 @@ export function renderMiniPlayer(container, actions) {
         <span class="time" data-total>0:00</span>
       </div>
       <div class="mini-controls">
-        <button class="ctl small" data-act="previous" title="Previous">${icon("previous", 18)}</button>
-        <button class="ctl small primary" data-act="playpause" title="Play">${icon("play", 18)}</button>
-        <button class="ctl small" data-act="next" title="Next">${icon("next", 18)}</button>
+        <button class="ctl small" data-act="previous" title="Previous" aria-label="Previous">${icon("previous", 18)}</button>
+        <button class="ctl small primary" data-act="playpause" title="Play" aria-label="Play">${icon("play", 18)}</button>
+        <button class="ctl small" data-act="next" title="Next" aria-label="Next">${icon("next", 18)}</button>
       </div>
     </div>
   `;

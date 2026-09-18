@@ -1,5 +1,6 @@
 /* mpd-wui — dark, minimal, warm-amber accent. Palette via custom properties. */
 :root {
+  color-scheme: dark;
   --bg: #0f1115;
   --bg-elev: #161a21;
   --fg: #e7e9ee;
@@ -40,6 +41,25 @@ html, body {
 .conn { width: 9px; height: 9px; border-radius: 50%; background: var(--err); }
 .conn.up { background: var(--ok); }
 
+.conn-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: rgba(224, 91, 91, 0.12);
+  border-bottom: 1px solid var(--err);
+  color: var(--fg);
+  font-size: 0.92em;
+}
+.conn-banner .retry {
+  margin-left: auto;
+  padding: 4px 12px;
+  border: 1px solid var(--err);
+  border-radius: var(--radius);
+  color: var(--fg);
+}
+.conn-banner .retry:hover { color: #fff; }
+
 .tabs { display: flex; gap: 4px; margin-left: auto; }
 .tab {
   background: none;
@@ -53,7 +73,10 @@ html, body {
 .tab.active { color: var(--fg); background: var(--bg-elev); }
 .tab:hover { color: var(--fg); }
 
-.view { flex: 1; overflow: auto; padding: 16px; }
+.view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+/* Each main view is a kept-alive pane that scrolls (and holds its own scroll
+   position) independently. */
+.view-pane { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
 
 .minibar {
   border-top: 1px solid var(--line);
@@ -260,6 +283,8 @@ input[type="range"] {
   border-radius: var(--radius);
   cursor: pointer;
 }
+.row-move { display: flex; gap: 2px; }
+.row-move .row-btn:disabled { opacity: 0.25; }
 .queue-row:hover { background: var(--bg-elev); }
 .queue-row.current { border-color: var(--accent); color: var(--accent); }
 .queue-handle {
@@ -401,6 +426,16 @@ input[type="range"] {
 .row:focus-within .row-actions { opacity: 1; }
 .row-btn.primary { color: var(--accent); }
 .row-btn.primary:hover { color: var(--accent); background: rgba(230, 162, 60, 0.12); }
+
+.show-more {
+  justify-self: center;
+  margin-top: 6px;
+  padding: 8px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+}
+.show-more:hover { color: var(--fg); border-color: var(--accent); }
 
 .coll-types { display: flex; gap: 8px; flex-wrap: wrap; }
 .coll-type {
