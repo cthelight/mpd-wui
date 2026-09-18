@@ -1,0 +1,5 @@
+target/
+.git/
+PLAN.md
+*.swp
+.DS_Store

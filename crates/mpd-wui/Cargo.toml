@@ -1,0 +1,15 @@
+[package]
+name = "mpd-wui"
+description = "Single-binary MPD web UI: serves the embedded frontend, JSON API and WebSocket."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mpd-client = { path = "../mpd-client" }
+mpd-api = { path = "../mpd-api" }
+mpd-web = { path = "../mpd-web" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

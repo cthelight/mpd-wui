@@ -1,0 +1,11 @@
+# Rust
+target/
+
+# Plan / reference (local only)
+PLAN.md
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

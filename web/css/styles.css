@@ -1,0 +1,59 @@
+/* mpd-wui — dark, minimal, warm-amber accent. Palette via custom properties. */
+:root {
+  --bg: #0f1115;
+  --bg-elev: #161a21;
+  --fg: #e7e9ee;
+  --fg-dim: #8b93a1;
+  --accent: #e6a23c;
+  --accent-dim: #b57e27;
+  --line: #232936;
+  --ok: #4caf50;
+  --err: #e05b5b;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+}
+
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.wordmark { font-weight: 600; letter-spacing: 0.02em; }
+
+.conn { width: 9px; height: 9px; border-radius: 50%; background: var(--err); }
+.conn.up { background: var(--ok); }
+
+.tabs { display: flex; gap: 4px; margin-left: auto; }
+.tab {
+  background: none;
+  border: 0;
+  color: var(--fg-dim);
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.tab.active { color: var(--fg); background: var(--bg-elev); }
+.tab:hover { color: var(--fg); }
+
+.view { flex: 1; overflow: auto; padding: 16px; }
+
+.minibar {
+  border-top: 1px solid var(--line);
+  padding: 10px 16px;
+}

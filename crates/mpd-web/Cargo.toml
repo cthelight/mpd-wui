@@ -1,0 +1,11 @@
+[package]
+name = "mpd-web"
+description = "Embedded static frontend for mpd-wui."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rust-embed = { workspace = true }
+axum = { workspace = true }
+http-body-util = { workspace = true }
