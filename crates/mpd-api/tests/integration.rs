@@ -191,6 +191,19 @@ async fn search_returns_songs() {
 }
 
 #[tokio::test]
+async fn search_exact_returns_songs() {
+    let (router, _, mock) = app().await;
+    mock.set_search(vec![fields(&[("file", "exact.flac"), ("Artist", "A")])])
+        .await;
+
+    let (status, _, body) = call(&router, get("/api/search?exact=1&artist=A")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(value.as_array().expect("array").len(), 1);
+    assert_eq!(value[0]["file"], "exact.flac");
+}
+
+#[tokio::test]
 async fn capabilities_reports_mock_commands() {
     let initial = MockState {
         commands: vec!["play".to_string(), "pause".to_string()],

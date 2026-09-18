@@ -75,6 +75,7 @@ async fn add_target(client: &MpdClient, target: &QueueTarget) -> Result<(), ApiE
         QueueTarget::Genre { genre } => {
             client.searchadd(&[("Genre", genre.as_str())], "==").await?
         }
+        QueueTarget::Date { date } => client.searchadd(&[("Date", date.as_str())], "==").await?,
     }
     Ok(())
 }

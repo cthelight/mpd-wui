@@ -38,6 +38,8 @@ pub struct Status {
     pub consume: bool,
     pub crossfade: u32,
     pub playlist_version: u32,
+    /// Number of songs currently in the playlist.
+    pub songs: u32,
     /// True while the database is updating.
     pub updating: bool,
 }

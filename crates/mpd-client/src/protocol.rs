@@ -304,6 +304,7 @@ pub fn parse_status(resp: &Response) -> Status {
         consume: bool_of("consume"),
         crossfade: uint_of("crossfade"),
         playlist_version: uint_of("playlist"),
+        songs: uint_of("songs"),
         updating,
     }
 }
@@ -421,7 +422,7 @@ mod tests {
 
     #[test]
     fn parse_simple_status() {
-        let raw = "volume: 50\nrandom: 0\nrepeat: 1\nsingle: 0\nconsume: 0\nstate: play\ncrossfade: 0\nplaylist: 7\ntime: 245\nelapsed: 12.5\nOK\n";
+        let raw = "volume: 50\nrandom: 0\nrepeat: 1\nsingle: 0\nconsume: 0\nstate: play\ncrossfade: 0\nplaylist: 7\nsongs: 3\ntime: 245\nelapsed: 12.5\nOK\n";
         let r = parse_text(raw);
         assert!(r.ack.is_none());
         let s = parse_status(&r);
@@ -430,6 +431,7 @@ mod tests {
         assert!(s.repeat);
         assert!(!s.random);
         assert_eq!(s.playlist_version, 7);
+        assert_eq!(s.songs, 3);
         assert_eq!(s.time, 245);
         assert!((s.elapsed - 12.5).abs() < 1e-6);
     }

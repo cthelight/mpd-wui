@@ -41,6 +41,7 @@ pub enum QueueTarget {
     Album { album: String },
     AlbumArtist { albumartist: String },
     Genre { genre: String },
+    Date { date: String },
 }
 
 #[derive(Debug, Deserialize)]

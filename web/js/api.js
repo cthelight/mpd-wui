@@ -12,12 +12,12 @@ async function errorFromResponse(res) {
   return new Error(`${res.status} ${detail}`.trim());
 }
 
-export async function get(path, params) {
+export async function get(path, params, signal) {
   const url = new URL(config.apiBase + path, location.origin);
   for (const [k, v] of Object.entries(params || {})) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
   }
-  const res = await fetch(url);
+  const res = await fetch(url, signal ? { signal } : undefined);
   if (!res.ok) throw await errorFromResponse(res);
   return res.json();
 }
