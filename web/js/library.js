@@ -78,6 +78,33 @@ function fileData(entry) {
   };
 }
 
+function hitData(hit) {
+  if (hit.kind === "artist") {
+    return {
+      kind: "hit",
+      icon: "artist",
+      title: hit.name,
+      subtitle: `${hit.count} tracks`,
+      drill: true,
+      nav: { type: "artist", key: hit.key, name: hit.name },
+    };
+  }
+  if (hit.kind === "album") {
+    return {
+      kind: "hit",
+      icon: "album",
+      title: hit.name,
+      subtitle: [hit.artist, `${hit.count} tracks`].filter(Boolean).join(" — "),
+      drill: true,
+      nav: { type: "album", album: hit.name, albumartist: hit.artist ?? null },
+    };
+  }
+  const row = songData(hit.song);
+  row.kind = "hit";
+  row.icon = "music";
+  return row;
+}
+
 function valueData(targetKey, value, subtitle, drill) {
   return {
     kind: "value",
@@ -90,7 +117,8 @@ function valueData(targetKey, value, subtitle, drill) {
 }
 
 function rowHtml(data, index) {
-  const iconName = data.kind === "dir" ? "folder" : data.kind === "value" ? "music" : "file";
+  const iconName =
+    data.icon ?? (data.kind === "dir" ? "folder" : data.kind === "value" ? "music" : "file");
   return `
     <li class="row ${data.kind}${data.drill ? " drill" : ""}" data-index="${index}">
       <span class="row-icon">${icon(iconName, 18)}</span>
@@ -327,16 +355,16 @@ export function mountLibrary(container) {
             albums.map((album) => valueData("album", album, context, true))
           );
         } else {
-          const songs = await get("/search", { exact: "1", [type]: value });
+          const hits = await get("/search", { [type]: value });
           if (token !== collToken) return;
-          setRows(collList, collStore, songs.map(songData));
+          setRows(collList, collStore, hits.map(hitData));
         }
       } else {
         const parentValue = collStack[1].value;
         const album = collStack[2].value;
-        const songs = await get("/search", { exact: "1", [type]: parentValue, album });
+        const hits = await get("/search", { [type]: parentValue, album });
         if (token !== collToken) return;
-        setRows(collList, collStore, songs.map(songData));
+        setRows(collList, collStore, hits.map(hitData));
       }
     } catch (err) {
       if (token !== collToken) return;
@@ -353,6 +381,31 @@ export function mountLibrary(container) {
 
   function selectCollValue(data) {
     collStack.push({ key: data.targetKey, value: data.title, label: data.title });
+    loadCollection();
+  }
+
+  // Jump from a search hit straight to the collection that shows the item in
+  // full: an artist lists their albums; an album lists its songs.
+  function drillIntoSearchHit(nav) {
+    if (nav.type === "artist") {
+      collStack = [
+        { key: nav.key, label: labelFor(nav.key) },
+        { key: nav.key, value: nav.name, label: nav.name },
+      ];
+    } else if (nav.albumartist) {
+      collStack = [
+        { key: "albumartist", label: labelFor("albumartist") },
+        { key: "albumartist", value: nav.albumartist, label: nav.albumartist },
+        { key: "album", value: nav.album, label: nav.album },
+      ];
+    } else {
+      collStack = [
+        { key: "album", label: labelFor("album") },
+        { key: "album", value: nav.album, label: nav.album },
+      ];
+    }
+    activeMode = "collections";
+    showMode();
     loadCollection();
   }
 
@@ -377,9 +430,9 @@ export function mountLibrary(container) {
       const controller = new AbortController();
       searchController = controller;
       try {
-        const songs = await get("/search", { q: query }, controller.signal);
+        const hits = await get("/search", { q: query }, controller.signal);
         if (controller !== searchController) return;
-        setRows(searchList, searchStore, songs.map(songData));
+        setRows(searchList, searchStore, hits.map(hitData));
       } catch (err) {
         if (err.name === "AbortError") return;
         setMessage(searchList, searchStore, err.message, "error");
@@ -389,7 +442,7 @@ export function mountLibrary(container) {
 
   bindList(browseList, browseStore, (data) => navigateBrowse(data.path));
   bindList(collList, collStore, selectCollValue);
-  bindList(searchList, searchStore, () => {});
+  bindList(searchList, searchStore, (data) => drillIntoSearchHit(data.nav));
 
   container.querySelectorAll("[data-mode]").forEach((button) => {
     button.addEventListener("click", () => {

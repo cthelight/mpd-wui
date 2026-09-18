@@ -60,7 +60,7 @@ cargo build --release --locked -p mpd-wui
 | GET    | `/api/playlist`                             | Full playlist                   |
 | GET    | `/api/browse?path=`                         | Browse a directory              |
 | GET    | `/api/list?type=&artist=&albumartist=`      | List collection values          |
-| GET    | `/api/search?q=&artist=&album=...`          | Search songs                    |
+| GET    | `/api/search?q=&artist=&album=...&limit=`   | Fuzzy search: artists, albums, tracks |
 | GET    | `/api/capabilities`                         | MPD capabilities                |
 | GET    | `/api/albumart?uri=`                        | Album art proxy                 |
 | POST   | `/api/play`, `/api/pause`, `/api/stop`      | Transport controls              |

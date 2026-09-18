@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use axum::extract::{Query, State};
 use axum::Json;
 
-use mpd_client::{Browse, Song};
+use mpd_client::Browse;
 
 use crate::error::ApiError;
-use crate::search::{self, Field};
+use crate::search::{self, Field, SearchHit};
 use crate::AppState;
 
 use super::param;
@@ -66,14 +66,18 @@ const SEARCH_FIELDS: &[(&str, Field)] = &[
 ];
 
 /// Local search: pull the whole library into the process (cached by TTL) and
-/// filter it here. MPD's filter grammar has no `OR`, so broad "match any tag"
-/// search can't be done server-side; exact multi-tag search can, but doing
-/// everything locally keeps the two paths uniform and avoids the fragile
-/// filter-syntax edge cases.
+/// rank it here. MPD's filter grammar has no `OR`, so broad "match any tag"
+/// search can't be done server-side; doing it locally keeps the two paths
+/// uniform and avoids the fragile filter-syntax edge cases.
+///
+/// A `q` term fuzzy-matches artists, albums and tracks together (one ordered
+/// list, capped by `?limit=`). Without `q`, the tag params are exact
+/// constraints that return every matching track (the collection drill-down
+/// "show me the whole item" path).
 pub async fn search(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<Song>>, ApiError> {
+) -> Result<Json<Vec<SearchHit>>, ApiError> {
     let mut query = search::Query::default();
     if let Some(q) = param(&params, "q") {
         if !q.trim().is_empty() {
@@ -88,8 +92,13 @@ pub async fn search(
     if query.is_empty() {
         return Ok(Json(Vec::new()));
     }
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|l| *l > 0)
+        .unwrap_or(search::DEFAULT_LIMIT);
     let library = state.library.get(&state.client).await?;
-    Ok(Json(search::filter(&library, &query)))
+    Ok(Json(search::search(&library, &query, limit)))
 }
 
 #[cfg(test)]

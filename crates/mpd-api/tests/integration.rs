@@ -197,8 +197,11 @@ async fn search_returns_songs() {
     let (status, _, body) = call(&router, get("/api/search?q=hit")).await;
     assert_eq!(status, StatusCode::OK);
     let value = as_json(&body);
-    assert_eq!(value.as_array().expect("array").len(), 1);
-    assert_eq!(value[0]["file"], "hit.flac");
+    let hits = value.as_array().expect("array");
+    // No artist/album on this song, so the only hit is the track itself.
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["kind"], "track");
+    assert_eq!(hits[0]["song"]["file"], "hit.flac");
 }
 
 #[tokio::test]
@@ -207,11 +210,14 @@ async fn search_exact_returns_songs() {
     mock.set_search(vec![fields(&[("file", "exact.flac"), ("Artist", "A")])])
         .await;
 
-    let (status, _, body) = call(&router, get("/api/search?exact=1&artist=A")).await;
+    let (status, _, body) = call(&router, get("/api/search?artist=A")).await;
     assert_eq!(status, StatusCode::OK);
     let value = as_json(&body);
-    assert_eq!(value.as_array().expect("array").len(), 1);
-    assert_eq!(value[0]["file"], "exact.flac");
+    let hits = value.as_array().expect("array");
+    // Exact-only (no free text) returns the whole item as track hits.
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["kind"], "track");
+    assert_eq!(hits[0]["song"]["file"], "exact.flac");
 }
 
 #[tokio::test]
@@ -239,12 +245,19 @@ async fn search_filters_locally_across_fields_and_tags() {
     ])
     .await;
 
-    // Free text matches any field (here the artist "Beta").
+    // Free text fuzzy-matches artists, albums and tracks in one list. "beta"
+    // surfaces both the artist "Beta" and the matching track.
     let (status, _, body) = call(&router, get("/api/search?q=beta")).await;
     assert_eq!(status, StatusCode::OK);
     let value = as_json(&body);
-    assert_eq!(value.as_array().expect("array").len(), 1);
-    assert_eq!(value[0]["file"], "beta/two.flac");
+    let hits = value.as_array().expect("array");
+    assert_eq!(hits.len(), 2);
+    assert!(hits
+        .iter()
+        .any(|h| h["kind"] == "track" && h["song"]["file"] == "beta/two.flac"));
+    assert!(hits
+        .iter()
+        .any(|h| h["kind"] == "artist" && h["name"] == "Beta"));
 
     // Multi-tag exact constraints are ANDed (the case MPD's filter grammar broke on).
     let (status, _, body) = call(&router, get("/api/search?genre=rock&title=two")).await;
@@ -256,10 +269,14 @@ async fn search_filters_locally_across_fields_and_tags() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(as_json(&body).as_array().expect("array").len(), 0);
 
-    // Free text + exact constraints combine.
+    // Free text + exact constraints combine (ranked within the constrained pool).
     let (status, _, body) = call(&router, get("/api/search?q=blue&artist=gamma")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(as_json(&body).as_array().expect("array").len(), 1);
+    let value = as_json(&body);
+    let hits = value.as_array().expect("array");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["kind"], "track");
+    assert_eq!(hits[0]["song"]["file"], "gamma/blue.flac");
 
     // No query at all returns an empty list (and must not error).
     let (status, _, body) = call(&router, get("/api/search")).await;

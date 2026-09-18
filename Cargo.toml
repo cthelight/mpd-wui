@@ -24,6 +24,7 @@ anyhow = "1"
 futures-util = "0.3"
 rust-embed = "8"
 http-body-util = "0.1"
+nucleo-matcher = "0.3"
 
 [profile.release]
 lto = "thin"
