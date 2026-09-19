@@ -6,6 +6,9 @@ use serde::Deserialize;
 pub struct PlayReq {
     pub position: Option<u32>,
     pub id: Option<u32>,
+    /// Replace the queue with the given song before playing it.
+    #[serde(default)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]

@@ -394,6 +394,104 @@ async fn play_by_id_targets_stable_playlist_id() {
     assert_eq!(status, StatusCode::OK);
     let value = as_json(&body);
     assert_eq!(value["song"]["file"], "a/two.flac");
+
+    // Without `clear` the rest of the queue must be untouched.
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(
+        value.as_array().expect("array").len(),
+        2,
+        "plain play must keep the queue"
+    );
+}
+
+#[tokio::test]
+async fn play_clear_replaces_queue_with_that_song() {
+    let initial = MockState {
+        playlist: vec![
+            fields(&[("file", "a/one.flac"), ("Id", "10")]),
+            fields(&[("file", "a/two.flac"), ("Id", "11")]),
+            fields(&[("file", "a/three.flac"), ("Id", "12")]),
+        ],
+        ..Default::default()
+    };
+    let (router, _state, _mock) = app_with(initial).await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json("/api/play", &json!({"id": 11, "clear": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    assert_eq!(songs.len(), 1, "the queue must hold only the played song");
+    assert_eq!(songs[0]["file"], "a/two.flac");
+
+    let (status, _, body) = call(&router, get("/api/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(as_json(&body)["song"]["file"], "a/two.flac");
+}
+
+#[tokio::test]
+async fn play_clear_by_position() {
+    let initial = MockState {
+        playlist: vec![
+            fields(&[("file", "a/one.flac"), ("Id", "10")]),
+            fields(&[("file", "a/two.flac"), ("Id", "11")]),
+            fields(&[("file", "a/three.flac"), ("Id", "12")]),
+        ],
+        ..Default::default()
+    };
+    let (router, _state, _mock) = app_with(initial).await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json("/api/play", &json!({"position": 2, "clear": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    assert_eq!(songs.len(), 1, "the queue must hold only the played song");
+    assert_eq!(songs[0]["file"], "a/three.flac");
+}
+
+#[tokio::test]
+async fn play_clear_unknown_id_rejected_before_wipe() {
+    // The id is not in the queue: the request is a client error and the
+    // queue must be left untouched.
+    let initial = MockState {
+        playlist: vec![
+            fields(&[("file", "a/one.flac"), ("Id", "10")]),
+            fields(&[("file", "a/two.flac"), ("Id", "11")]),
+        ],
+        ..Default::default()
+    };
+    let (router, _state, _mock) = app_with(initial).await;
+
+    let (status, _, body) = call(
+        &router,
+        post_json("/api/play", &json!({"id": 999, "clear": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(as_json(&body)["error"], "no such song in queue");
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    assert_eq!(songs.len(), 2, "the queue must be untouched");
+    assert_eq!(songs[0]["file"], "a/one.flac");
+    assert_eq!(songs[1]["file"], "a/two.flac");
 }
 
 /// The mock never emits `changed: options` in response to an option command,

@@ -13,7 +13,8 @@ server.
 - Now Playing view with art, transport controls, seek, volume, and playback
   modes
 - Persistent mini-player
-- Queue with play, remove, clear, shuffle, and drag-to-reorder
+- Queue with play (replaces the queue with the played song), remove, clear,
+  shuffle, and drag-to-reorder
 - Library with debounced search, folder browsing, and collections by artist,
   album artist, album, genre, and year
 - Add or play songs, albums, artists, genres, years, and folders into the
@@ -74,7 +75,7 @@ use) and rely on `MPD_PASSWORD` for the MPD bridge itself.
 | GET    | `/api/search?q=&artist=&album=...&limit=`   | Fuzzy search: artists, albums, tracks |
 | GET    | `/api/capabilities`                         | MPD capabilities                |
 | GET    | `/api/albumart?uri=`                        | Album art proxy                 |
-| POST   | `/api/play`, `/api/pause`, `/api/stop`      | Transport controls              |
+| POST   | `/api/play`, `/api/pause`, `/api/stop`      | Transport controls (`play` accepts `{position?}` / `{id?}`, `clear: true` keeps only that song) |
 | POST   | `/api/next`, `/api/previous`                | Track navigation                |
 | POST   | `/api/seek`, `/api/volume`                  | Seek and volume                 |
 | POST   | `/api/options`                              | Random/repeat/single/consume    |

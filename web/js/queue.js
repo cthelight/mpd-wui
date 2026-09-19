@@ -159,10 +159,11 @@ export function mountQueue(container, state) {
     } else if (action === "down") {
       act("move", { id, to: index + 1 });
     } else if (action === "play" || !action) {
+      // Play this song only: the queue is cleared and replaced with it.
       // Prefer the stable playlist id: a positional index can be invalidated
       // by a concurrent queue change before this request reaches MPD.
       const rawId = row.dataset.id;
-      const body = rawId !== "" ? { id: Number(rawId) } : { position: index };
+      const body = rawId !== "" ? { id: Number(rawId), clear: true } : { position: index, clear: true };
       post("/play", body).catch((err) => toast(err?.message || String(err)));
     }
   });
