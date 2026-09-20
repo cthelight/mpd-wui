@@ -768,6 +768,179 @@ async fn queue_add_rejects_unknown_target() {
     assert!(as_json(&body)["error"].is_string());
 }
 
+/// `position: after_current` must place the new song right after the playing
+/// one, before the rest of the queue.
+#[tokio::test]
+async fn queue_add_after_current_inserts_after_playing_song() {
+    let initial = wipe_state(
+        vec![
+            fields(&[("file", "a/one.flac"), ("Id", "10")]),
+            fields(&[("file", "a/two.flac"), ("Id", "11")]),
+            fields(&[("file", "a/three.flac"), ("Id", "12")]),
+        ],
+        vec![fields(&[
+            ("file", "new/one.flac"),
+            ("Id", "900"),
+            ("Artist", "X"),
+        ])],
+    );
+    let (router, _state, mock) = app_with(initial).await;
+    // No pinned `playlistlength`: the mock mirrors the live playlist size,
+    // as real MPD does.
+    mock.set_status(fields(&[("state", "play"), ("song", "1")]))
+        .await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json(
+            "/api/queue/add",
+            &json!({"targets": [{"artist": "X"}], "position": "after_current"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    let files: Vec<&str> = songs
+        .iter()
+        .map(|s| s["file"].as_str().expect("file"))
+        .collect();
+    assert_eq!(
+        files,
+        vec!["a/one.flac", "a/two.flac", "new/one.flac", "a/three.flac"],
+        "the new song must land right after the playing one"
+    );
+}
+
+/// Several appended songs move as one block, keeping their order, right
+/// after the playing song.
+#[tokio::test]
+async fn queue_add_after_current_moves_block_of_songs() {
+    let initial = wipe_state(
+        vec![
+            fields(&[("file", "a/one.flac"), ("Id", "10")]),
+            fields(&[("file", "a/two.flac"), ("Id", "11")]),
+            fields(&[("file", "a/three.flac"), ("Id", "12")]),
+        ],
+        vec![
+            fields(&[("file", "new/one.flac"), ("Id", "900"), ("Artist", "X")]),
+            fields(&[("file", "new/two.flac"), ("Id", "901"), ("Artist", "X")]),
+        ],
+    );
+    let (router, _state, mock) = app_with(initial).await;
+    mock.set_status(fields(&[("state", "play"), ("song", "1")]))
+        .await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json(
+            "/api/queue/add",
+            &json!({"targets": [{"artist": "X"}], "position": "after_current"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    let files: Vec<&str> = songs
+        .iter()
+        .map(|s| s["file"].as_str().expect("file"))
+        .collect();
+    assert_eq!(
+        files,
+        vec![
+            "a/one.flac",
+            "a/two.flac",
+            "new/one.flac",
+            "new/two.flac",
+            "a/three.flac"
+        ],
+        "all appended songs must land right after the playing one, in order"
+    );
+}
+
+/// With nothing playing, `after_current` means the front of the queue.
+#[tokio::test]
+async fn queue_add_after_current_with_nothing_playing_goes_to_front() {
+    let initial = wipe_state(
+        vec![
+            fields(&[("file", "a/one.flac"), ("Id", "10")]),
+            fields(&[("file", "a/two.flac"), ("Id", "11")]),
+        ],
+        vec![fields(&[
+            ("file", "new/one.flac"),
+            ("Id", "900"),
+            ("Artist", "X"),
+        ])],
+    );
+    let (router, _state, mock) = app_with(initial).await;
+    mock.set_status(fields(&[("state", "stop")])).await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json(
+            "/api/queue/add",
+            &json!({"targets": [{"artist": "X"}], "position": "after_current"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    assert_eq!(songs.len(), 3);
+    assert_eq!(
+        songs[0]["file"], "new/one.flac",
+        "nothing playing: the new song must lead the queue"
+    );
+    assert_eq!(songs[1]["file"], "a/one.flac");
+    assert_eq!(songs[2]["file"], "a/two.flac");
+}
+
+/// Without `position` the songs simply append to the end (the old behavior).
+#[tokio::test]
+async fn queue_add_default_appends_to_end() {
+    let initial = wipe_state(
+        vec![
+            fields(&[("file", "a/one.flac"), ("Id", "10")]),
+            fields(&[("file", "a/two.flac"), ("Id", "11")]),
+        ],
+        vec![fields(&[
+            ("file", "new/one.flac"),
+            ("Id", "900"),
+            ("Artist", "X"),
+        ])],
+    );
+    let (router, _state, mock) = app_with(initial).await;
+    mock.set_status(fields(&[("state", "play"), ("song", "0")]))
+        .await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json("/api/queue/add", &json!({"targets": [{"artist": "X"}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, body) = call(&router, get("/api/playlist")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let songs = value.as_array().expect("array");
+    let files: Vec<&str> = songs
+        .iter()
+        .map(|s| s["file"].as_str().expect("file"))
+        .collect();
+    assert_eq!(files, vec!["a/one.flac", "a/two.flac", "new/one.flac"]);
+}
+
 #[tokio::test]
 async fn albumart_proxies_bytes_and_validates_etag() {
     let initial = MockState {

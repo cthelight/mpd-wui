@@ -48,11 +48,24 @@ pub enum QueueTarget {
     Date { date: String },
 }
 
+/// Where added songs are placed in the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AddPosition {
+    /// Right after the current song (front of the queue when nothing plays).
+    AfterCurrent,
+    /// At the end of the queue (default).
+    #[default]
+    End,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AddReq {
     pub targets: Vec<QueueTarget>,
     #[serde(default)]
     pub play: bool,
+    #[serde(default)]
+    pub position: AddPosition,
 }
 
 #[derive(Debug, Deserialize)]

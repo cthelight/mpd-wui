@@ -316,6 +316,17 @@ impl MpdClient {
         self.cmd(&format!("moveid {id} {to}")).await.map(|_| ())
     }
 
+    /// Move the songs at positions `start..end` (end exclusive, per MPD's
+    /// `move start:end pos`) so the block's first song lands at `pos`.
+    /// An empty range is a no-op; out-of-range indices are rejected.
+    /// Used to place freshly appended songs after the current one without
+    /// needing their ids.
+    pub async fn move_range(&self, start: u32, end: u32, pos: u32) -> anyhow::Result<()> {
+        self.cmd(&format!("move {start}:{end} {pos}"))
+            .await
+            .map(|_| ())
+    }
+
     pub async fn shuffle(&self) -> anyhow::Result<()> {
         self.cmd("shuffle").await.map(|_| ())
     }

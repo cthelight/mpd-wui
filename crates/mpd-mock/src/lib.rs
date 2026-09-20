@@ -479,6 +479,50 @@ async fn handle_cmd(
             }
             write_all_chunked(w, b"OK\n", chunk).await?;
         }
+        "move" => {
+            // `move [start:]end pos`: move the exclusive range [start, end) so
+            // its first song lands at `pos`. The single-song form `move N pos`
+            // is the width-1 range [N, N+1). Mirrors MPD 0.23's
+            // playlist::MoveRange: the destination is validated against the
+            // queue length minus the moved block, then the range bounds.
+            let mut st = state.lock().await;
+            let mut parts = rest.split_whitespace();
+            let range = parts.next().unwrap_or("");
+            let pos = parts
+                .next()
+                .and_then(|p| p.parse::<usize>().ok())
+                .unwrap_or(0);
+            let (start, end) = match range.split_once(':') {
+                Some((a, b)) => (
+                    a.trim().parse::<usize>().unwrap_or(0),
+                    b.trim().parse::<usize>().unwrap_or(0),
+                ),
+                None => {
+                    let n = range.parse::<usize>().unwrap_or(0);
+                    (n, n + 1)
+                }
+            };
+            let len = st.playlist.len();
+            let count = end.saturating_sub(start);
+            let error = if count > 0 && pos > len.saturating_sub(count) {
+                Some(format!("Number too large: {pos}"))
+            } else if start >= len || end > len {
+                Some("Bad song index".to_string())
+            } else {
+                None
+            };
+            if let Some(msg) = error {
+                let ack = format!("ACK [2@0] {{move}} {msg}\n");
+                write_all_chunked(w, ack.as_bytes(), chunk).await?;
+            } else if start < end {
+                let songs: Vec<FieldList> = st.playlist.drain(start..end).collect();
+                st.playlist.splice(pos..pos, songs);
+                write_all_chunked(w, b"OK\n", chunk).await?;
+            } else {
+                // Empty range: MPD accepts it and changes nothing.
+                write_all_chunked(w, b"OK\n", chunk).await?;
+            }
+        }
         "play" => {
             let mut st = state.lock().await;
             if !rest.is_empty() {

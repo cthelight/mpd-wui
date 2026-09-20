@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use mpd_client::MpdClient;
 
 use crate::AppState;
-use crate::dto::{AddReq, MoveReq, QueueTarget, RemoveReq};
+use crate::dto::{AddPosition, AddReq, MoveReq, QueueTarget, RemoveReq};
 use crate::error::ApiError;
 
 use super::json_body;
@@ -16,9 +16,16 @@ pub async fn add(
     body: Result<Json<AddReq>, JsonRejection>,
 ) -> Result<StatusCode, ApiError> {
     let req = json_body(body)?;
-    tracing::debug!(targets = ?req.targets, play = req.play, "queue add request");
+    tracing::debug!(
+        targets = ?req.targets,
+        play = req.play,
+        position = ?req.position,
+        "queue add request"
+    );
     if req.play {
         add_and_play(&state, &req.targets).await
+    } else if req.position == AddPosition::AfterCurrent {
+        add_after_current(&state.client, &req.targets).await
     } else {
         for target in &req.targets {
             add_target(&state.client, target).await?;
@@ -70,6 +77,69 @@ async fn add_and_play(state: &AppState, targets: &[QueueTarget]) -> Result<Statu
         client.delete_range(0, old_len - 1).await?;
     }
     client.play(Some(0)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Append `targets` and move them right after the currently playing song so
+/// they play before the rest of the queue. With nothing playing, the songs go
+/// to the front of the queue.
+///
+/// `add`/`searchadd` do not report the new playlist ids, so the songs are
+/// placed by position: they are appended (at `old_len..new_len`) and then
+/// moved back to `song + 1`. The move is always backward, which MPD's
+/// `move start:end pos` defines unambiguously.
+async fn add_after_current(
+    client: &MpdClient,
+    targets: &[QueueTarget],
+) -> Result<StatusCode, ApiError> {
+    if targets.is_empty() {
+        return Err(ApiError::bad_request("nothing to add"));
+    }
+    for target in targets {
+        validate_target(client, target).await?;
+    }
+
+    let status = client.status().await?;
+    let at = status.song.map(|p| p.saturating_add(1)).unwrap_or(0);
+    let old_len = status.songs;
+    tracing::debug!(
+        state = ?status.state,
+        song = ?status.song,
+        old_len,
+        at,
+        targets = targets.len(),
+        "enqueue-next: status before add"
+    );
+
+    for target in targets {
+        add_target(client, target).await?;
+    }
+    let new_len = client.playlist_count().await?;
+    let added = new_len.saturating_sub(old_len);
+    if added == 0 {
+        return Err(ApiError::bad_request("nothing to add"));
+    }
+    // Nothing to move when the range already starts at `at` (queue was empty).
+    if at < old_len {
+        tracing::debug!(
+            old_len,
+            new_len,
+            added,
+            at,
+            range_start = old_len,
+            range_end = new_len,
+            "enqueue-next: moving appended range to `at`"
+        );
+        client.move_range(old_len, new_len, at).await?;
+    } else {
+        tracing::debug!(
+            old_len,
+            new_len,
+            added,
+            at,
+            "enqueue-next: no move (appended range already at/after `at`)"
+        );
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

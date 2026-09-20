@@ -40,6 +40,10 @@ pub struct Status {
     pub playlist_version: u32,
     /// Number of songs currently in the playlist.
     pub songs: u32,
+    /// Index of the current song in the playlist (0-based). MPD omits the
+    /// field when nothing is playing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub song: Option<u32>,
     /// True while the database is updating.
     pub updating: bool,
 }

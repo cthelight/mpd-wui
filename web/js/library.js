@@ -122,7 +122,8 @@ function rowHtml(data, index) {
       </div>
       <span class="row-time">${data.time ? formatTime(data.time) : ""}</span>
       <div class="row-actions">
-        <button class="row-btn" data-row-act="add" title="Add">${icon("plus", 16)}</button>
+        <button class="row-btn" data-row-act="enqueue-next" title="Enqueue next">${icon("enqueueNext", 16)}</button>
+        <button class="row-btn" data-row-act="enqueue-end" title="Enqueue at end">${icon("enqueueEnd", 16)}</button>
         <button class="row-btn primary" data-row-act="play" title="Play">${icon("play", 16)}</button>
       </div>
     </li>
@@ -170,7 +171,7 @@ function setMessage(list, store, message, className = "empty") {
   list.innerHTML = `<div class="${className}">${escapeHtml(message)}</div>`;
 }
 
-async function queueTarget(target, play, button) {
+async function queueTarget(target, play, button, position = "end") {
   if (!target) {
     toast("Nothing to queue");
     return;
@@ -178,7 +179,7 @@ async function queueTarget(target, play, button) {
   const original = button.innerHTML;
   button.disabled = true;
   try {
-    await post("/queue/add", { targets: [target], play });
+    await post("/queue/add", { targets: [target], play, position });
   } catch (err) {
     toast(err?.message || String(err));
   } finally {
@@ -195,7 +196,9 @@ function bindList(list, store, onDrill) {
     if (!data) return;
     const action = event.target.closest("[data-row-act]");
     if (action) {
-      if (action.dataset.rowAct === "add") queueTarget(data.target, false, action);
+      if (action.dataset.rowAct === "enqueue-next")
+        queueTarget(data.target, false, action, "after_current");
+      if (action.dataset.rowAct === "enqueue-end") queueTarget(data.target, false, action, "end");
       if (action.dataset.rowAct === "play") queueTarget(data.target, true, action);
       return;
     }

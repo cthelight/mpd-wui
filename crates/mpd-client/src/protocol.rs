@@ -310,6 +310,8 @@ pub fn parse_status(resp: &Response) -> Status {
         playlist_version: uint_of("playlist"),
         // The playlist length is reported as `playlistlength`, not `songs`.
         songs: uint_of("playlistlength"),
+        // The current song's playlist position; MPD omits it when stopped.
+        song: resp.get("song").and_then(|v| v.parse().ok()),
         updating,
     }
 }
@@ -502,17 +504,19 @@ mod tests {
         assert_eq!(s.crossfade, 5, "xfade must map to crossfade");
         assert_eq!(s.playlist_version, 843);
         assert!(s.consume);
+        assert_eq!(s.song, Some(2), "song must be the current playlist index");
     }
 
     #[test]
     fn parse_status_time_without_playing_is_zero() {
-        // When stopped MPD omits `time`/`elapsed` entirely.
+        // When stopped MPD omits `time`/`elapsed`/`song` entirely.
         let raw = "volume: 100\nstate: stop\nplaylist: 843\nplaylistlength: 0\nOK\n";
         let s = parse_status(&parse_text(raw));
         assert_eq!(s.state, crate::types::PlayState::Stop);
         assert_eq!(s.time, 0);
         assert_eq!(s.elapsed, 0.0);
         assert_eq!(s.songs, 0);
+        assert_eq!(s.song, None, "song must be absent when stopped");
     }
 
     #[test]

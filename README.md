@@ -79,7 +79,7 @@ use) and rely on `MPD_PASSWORD` for the MPD bridge itself.
 | POST   | `/api/next`, `/api/previous`                | Track navigation                |
 | POST   | `/api/seek`, `/api/volume`                  | Seek and volume                 |
 | POST   | `/api/options`                              | Random/repeat/single/consume    |
-| POST   | `/api/queue/add`, `/api/queue/remove`       | Modify the queue                |
+| POST   | `/api/queue/add`, `/api/queue/remove`       | Modify the queue (`add` accepts `position: "after_current" \| "end"`) |
 | POST   | `/api/queue/clear`, `/api/queue/move`       | Clear or reorder the queue      |
 | POST   | `/api/queue/shuffle`                        | Shuffle the queue               |
 | WS     | `/ws`                                       | Status and change events        |
