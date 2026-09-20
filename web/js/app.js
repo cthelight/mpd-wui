@@ -12,7 +12,11 @@ function fail(err) {
 }
 
 const state = {
-  view: "nowplaying",
+  // Starts null (not "nowplaying") so the initial applyRoute always counts as a
+  // switch and mounts the default view's pane. A pre-seeded "nowplaying" would
+  // make the first apply a no-op, leaving the Now Playing page empty until the
+  // user navigated away and back.
+  view: null,
   snapshot: null,
   lastSync: 0,
 };
