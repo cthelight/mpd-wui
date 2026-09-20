@@ -462,7 +462,8 @@ async fn queue_commands_succeed() {
     );
 
     // Wipe the first two entries (the added file plus one search hit).
-    client.delete_range(0, 1).await.expect("delete range");
+    // `delete` is exclusive-end: [0, 2) removes indices 0 and 1.
+    client.delete_range(0, 2).await.expect("delete range");
     assert_eq!(
         client
             .playlist_count()

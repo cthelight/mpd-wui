@@ -570,24 +570,28 @@ async fn write_fields(
     Ok(())
 }
 
-/// Parse an MPD positional spec (`N`, `a : b`, `a : ` for "to the end") and
-/// remove that inclusive range from the playlist, clamped to its length.
+/// Parse an MPD positional spec (`N`, `a:b`, `a:` for "to the end") and
+/// remove the exclusive range [start, end) from the playlist, clamping
+/// `end` to its length. Mirrors MPD's `playlist::DeleteRange`: `RangeArg`
+/// is exclusive-end, so `delete N` is [N, N+1) and `delete a:b` is [a, b).
 fn remove_range(playlist: &mut Vec<FieldList>, spec: &str) {
     let spec = spec.trim();
     let (start, end) = if let Some((a, b)) = spec.split_once(':') {
         (
             a.trim().parse::<usize>().unwrap_or(0),
-            b.trim()
-                .parse::<usize>()
-                .unwrap_or(playlist.len().saturating_sub(1)),
+            if b.trim().is_empty() {
+                playlist.len() // `a:` means "to the end"
+            } else {
+                b.trim().parse::<usize>().unwrap_or(playlist.len())
+            },
         )
     } else {
         let i = spec.parse::<usize>().unwrap_or(0);
-        (i, i)
+        (i, i + 1) // single: [i, i+1)
     };
-    let end = end.min(playlist.len().saturating_sub(1));
-    if !playlist.is_empty() && start <= end {
-        playlist.drain(start..=end);
+    let end = end.min(playlist.len());
+    if start < end {
+        playlist.drain(start..end);
     }
 }
 

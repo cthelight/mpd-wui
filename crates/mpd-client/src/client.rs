@@ -292,8 +292,9 @@ impl MpdClient {
         self.cmd("clear").await.map(|_| ())
     }
 
-    /// Remove a positional range from the playlist, `delete start:end`
-    /// (inclusive). MPD clamps endpoints to the playlist length.
+    /// Remove the songs at positions `start..end` (end exclusive, per MPD's
+    /// `delete start:end`) from the playlist. MPD clamps `end` to the
+    /// playlist length; `start` beyond the length is an error.
     ///
     /// Position-based (`delete`) rather than id-based (`clearid`): callers
     /// remove a contiguous run of positions (the old prefix or the just

@@ -60,7 +60,7 @@ async fn add_and_play(state: &AppState, targets: &[QueueTarget]) -> Result<Statu
         if let Err(e) = add_target(client, target).await {
             if added > 0 {
                 // Compensation: drop only what this request appended.
-                let _ = client.delete_range(old_len, old_len + added - 1).await;
+                let _ = client.delete_range(old_len, old_len + added).await;
             }
             return Err(e);
         }
@@ -74,7 +74,7 @@ async fn add_and_play(state: &AppState, targets: &[QueueTarget]) -> Result<Statu
     // Drop the old prefix, then start at the top. If this fails the queue
     // holds old+new, which the user can still recover by hand.
     if old_len > 0 {
-        client.delete_range(0, old_len - 1).await?;
+        client.delete_range(0, old_len).await?;
     }
     client.play(Some(0)).await?;
     Ok(StatusCode::NO_CONTENT)

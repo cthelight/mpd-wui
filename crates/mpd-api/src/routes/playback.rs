@@ -60,7 +60,7 @@ async fn play_only(
     // Drop the old prefix; the re-appended song is now the only entry. If
     // this fails the queue holds old+song, which the user can recover by hand.
     if old_len > 0 {
-        client.delete_range(0, old_len - 1).await?;
+        client.delete_range(0, old_len).await?;
     }
     client.play(Some(0)).await?;
     Ok(())
