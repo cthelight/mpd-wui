@@ -391,6 +391,17 @@ input[type="range"] {
 .library-body { min-height: 240px; }
 .lib-pane { display: grid; gap: 12px; }
 
+.search-bar { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
+.search-kinds { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.search-kind {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--fg-dim);
+}
+.search-kind.active { color: var(--accent); border-color: var(--accent); }
+.search-kind:hover { color: var(--fg); }
+
 .breadcrumb {
   display: flex;
   flex-wrap: wrap;

@@ -65,6 +65,27 @@ const SEARCH_FIELDS: &[(&str, Field)] = &[
     ("date", Field::Date),
 ];
 
+/// Enabled result kinds for a free-text search, from `?kinds=` (a comma list of
+/// `artist`, `album`, `track`). Absent means all enabled; present means exactly
+/// the listed tokens are enabled (so an empty value enables none). The frontend
+/// omits the param for the default and skips the request entirely when nothing
+/// is enabled, so a present value is always an explicit narrowing.
+fn parse_kinds(params: &HashMap<String, String>) -> search::HitKinds {
+    let Some(raw) = params.get("kinds") else {
+        return search::HitKinds::ALL;
+    };
+    let mut kinds = search::HitKinds::NONE;
+    for token in raw.split(',') {
+        match token.trim() {
+            "artist" => kinds.artist = true,
+            "album" => kinds.album = true,
+            "track" => kinds.track = true,
+            _ => {}
+        }
+    }
+    kinds
+}
+
 /// Local search: pull the whole library into the process (cached by TTL) and
 /// rank it here. MPD's filter grammar has no `OR`, so broad "match any tag"
 /// search can't be done server-side; doing it locally keeps the two paths
@@ -89,7 +110,8 @@ pub async fn search(
             query.exact.push((*field, value.to_string()));
         }
     }
-    if query.is_empty() {
+    query.kinds = parse_kinds(&params);
+    if query.is_empty() || query.kinds == search::HitKinds::NONE {
         return Ok(Json(Vec::new()));
     }
     let limit = params
@@ -103,7 +125,10 @@ pub async fn search(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_browse_path;
+    use std::collections::HashMap;
+
+    use super::{normalize_browse_path, parse_kinds};
+    use crate::search::HitKinds;
 
     #[test]
     fn normalize_strips_leading_slash() {
@@ -112,5 +137,28 @@ mod tests {
         assert_eq!(normalize_browse_path("/Band"), "Band");
         assert_eq!(normalize_browse_path("///Band"), "Band");
         assert_eq!(normalize_browse_path("Band/Album"), "Band/Album");
+    }
+
+    #[test]
+    fn kinds_absent_means_all() {
+        let params: HashMap<String, String> = HashMap::new();
+        assert_eq!(parse_kinds(&params), HitKinds::ALL);
+    }
+
+    #[test]
+    fn kinds_reads_enabled_tokens() {
+        let mut params = HashMap::new();
+        params.insert("kinds".into(), "album,track".into());
+        let kinds = parse_kinds(&params);
+        assert!(!kinds.artist);
+        assert!(kinds.album);
+        assert!(kinds.track);
+    }
+
+    #[test]
+    fn kinds_present_but_empty_means_none() {
+        let mut params = HashMap::new();
+        params.insert("kinds".into(), String::new());
+        assert_eq!(parse_kinds(&params), HitKinds::NONE);
     }
 }

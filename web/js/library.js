@@ -233,7 +233,14 @@ export function mountLibrary(container, navigate, initialRoute) {
           <div class="list" data-coll-list></div>
         </section>
         <section class="lib-pane" data-pane="search" hidden>
-          <div class="breadcrumb" data-search-crumb>Search results</div>
+          <div class="search-bar">
+            <div class="breadcrumb" data-search-crumb>Search results</div>
+            <div class="search-kinds" data-search-kinds>
+              <button type="button" class="search-kind active" data-kind="track">Songs</button>
+              <button type="button" class="search-kind active" data-kind="artist">Artists</button>
+              <button type="button" class="search-kind active" data-kind="album">Albums</button>
+            </div>
+          </div>
           <div class="list" data-search-list></div>
         </section>
       </div>
@@ -276,6 +283,10 @@ export function mountLibrary(container, navigate, initialRoute) {
   }
   let searchTimer;
   let searchController;
+  // Which result kinds a search may return (all on by default). Toggled by the
+  // chips in the search pane and kept for the view's lifetime; deliberately
+  // out of the URL so toggling never pushes a history entry.
+  const searchKinds = { track: true, artist: true, album: true };
   // The last route this view applied; empty until the first restore so the
   // mount-time initial route always takes effect.
   let appliedHash = "";
@@ -466,17 +477,36 @@ export function mountLibrary(container, navigate, initialRoute) {
     tabs.hidden = true;
   }
 
+  // The kinds currently enabled, as the comma list the search API expects.
+  function enabledKinds() {
+    return Object.keys(searchKinds).filter((kind) => searchKinds[kind]);
+  }
+
   function startSearch(query) {
     clearTimeout(searchTimer);
     searchController?.abort();
     searchCrumb.textContent = `Search: ${query}`;
+
+    const enabled = enabledKinds();
+    if (!enabled.length) {
+      // Nothing to match. api.js omits empty params, so sending no kinds would
+      // mean "all" to the server — show an empty state instead of searching
+      // everything.
+      setMessage(searchList, searchStore, "No result types selected");
+      return;
+    }
+
     setMessage(searchList, searchStore, "Searching…");
 
     searchTimer = setTimeout(async () => {
       const controller = new AbortController();
       searchController = controller;
       try {
-        const hits = await get("/search", { q: query }, controller.signal);
+        const hits = await get(
+          "/search",
+          { q: query, kinds: enabled.join(",") },
+          controller.signal
+        );
         if (controller !== searchController) return;
         setRows(searchList, searchStore, hits.map(hitData));
       } catch (err) {
@@ -547,6 +577,18 @@ export function mountLibrary(container, navigate, initialRoute) {
   });
 
   searchInput.addEventListener("input", onSearchInput);
+
+  // Toggling a kind re-runs the current search (debounced) without touching the
+  // URL, so history is unaffected.
+  container.querySelectorAll("[data-search-kinds] [data-kind]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const kind = button.dataset.kind;
+      searchKinds[kind] = !searchKinds[kind];
+      button.classList.toggle("active", searchKinds[kind]);
+      const query = searchInput.value.trim();
+      if (query) startSearch(query);
+    });
+  });
 
   // The app passes the route the user arrived on (a deep link, or the default
   // Artists tab on a first visit) so the initial load matches the URL.

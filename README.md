@@ -15,8 +15,9 @@ server.
 - Persistent mini-player
 - Queue with play (replaces the queue with the played song), remove, clear,
   shuffle, and drag-to-reorder
-- Library with debounced search, folder browsing, and collections by artist,
-  album artist, album, genre, and year
+- Library with debounced search (filterable by songs, artists, albums),
+  folder browsing, and collections by artist, album artist, album, genre, and
+  year
 - Add or play songs, albums, artists, genres, years, and folders into the
   queue
 - Live status over WebSocket with locally interpolated progress
@@ -75,7 +76,7 @@ use) and rely on `MPD_PASSWORD` for the MPD bridge itself.
 | GET    | `/api/playlist`                             | Full playlist                   |
 | GET    | `/api/browse?path=`                         | Browse a directory              |
 | GET    | `/api/list?type=&artist=&albumartist=`      | List collection values          |
-| GET    | `/api/search?q=&artist=&album=...&limit=`   | Fuzzy search: artists, albums, tracks |
+| GET    | `/api/search?q=&artist=&album=...&kinds=&limit=` | Fuzzy search: artists, albums, tracks; `kinds` is a comma list of which kinds to return (all by default) |
 | GET    | `/api/capabilities`                         | MPD capabilities                |
 | GET    | `/api/albumart?uri=`                        | Album art proxy                 |
 | POST   | `/api/play`, `/api/pause`, `/api/stop`      | Transport controls (`play` accepts `{position?}` / `{id?}`, `clear: true` keeps only that song) |

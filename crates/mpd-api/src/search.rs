@@ -133,6 +133,36 @@ impl SearchHit {
     }
 }
 
+/// Which hit kinds a free-text query may return. All on by default; the
+/// search UI toggles them so the user can ignore, e.g., track matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitKinds {
+    pub artist: bool,
+    pub album: bool,
+    pub track: bool,
+}
+
+impl HitKinds {
+    /// Every kind enabled (the default).
+    pub const ALL: Self = Self {
+        artist: true,
+        album: true,
+        track: true,
+    };
+    /// No kinds enabled (a search with this returns nothing).
+    pub const NONE: Self = Self {
+        artist: false,
+        album: false,
+        track: false,
+    };
+}
+
+impl Default for HitKinds {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
 /// A search query: an optional free-text term (fuzzy, multi-word) combined with
 /// zero or more exact field constraints (ANDed).
 #[derive(Debug, Clone, Default)]
@@ -141,6 +171,8 @@ pub struct Query {
     pub free_text: Option<String>,
     /// Exact field constraints, all of which must hold.
     pub exact: Vec<(Field, String)>,
+    /// Which hit kinds a free-text query may return (all on by default).
+    pub kinds: HitKinds,
 }
 
 impl Query {
@@ -338,9 +370,17 @@ impl LibraryIndex {
     }
 
     /// Fuzzy-score artists, albums and tracks against `term`, interleaving the
-    /// kinds best-first and capping at `limit`. When `subset` is `Some`, only
-    /// songs in it are considered (the exact-constrained pool).
-    fn fuzzy_rank(&self, subset: Option<&[usize]>, term: &str, limit: usize) -> Vec<SearchHit> {
+    /// kinds best-first and capping at `limit`. Kinds not enabled in `kinds`
+    /// are not scored at all, so the cap falls on the remaining kinds. When
+    /// `subset` is `Some`, only songs in it are considered (the exact-
+    /// constrained pool).
+    fn fuzzy_rank(
+        &self,
+        subset: Option<&[usize]>,
+        kinds: HitKinds,
+        term: &str,
+        limit: usize,
+    ) -> Vec<SearchHit> {
         // Always case-insensitive: an all-caps query must still match Title-Case
         // metadata, so `Smart` (fzf's "caps = case-sensitive") would surprise users.
         let pattern = Pattern::new(
@@ -355,61 +395,71 @@ impl LibraryIndex {
 
         // Artists: precomputed distinct names; when constrained, the count is
         // restricted to the candidate pool.
-        for artist in &self.artists {
-            let count = match subset {
-                Some(subset) => count_in(&artist.songs, subset),
-                None => artist.songs.len() as u32,
-            };
-            if count == 0 {
-                continue;
-            }
-            if let Some(score) = score_haystack(&pattern, &mut matcher, &mut buf, &artist.name) {
-                hits.push(SearchHit::Artist {
-                    key: artist.key.to_string(),
-                    name: artist.name.clone(),
-                    count,
-                    score,
-                });
+        if kinds.artist {
+            for artist in &self.artists {
+                let count = match subset {
+                    Some(subset) => count_in(&artist.songs, subset),
+                    None => artist.songs.len() as u32,
+                };
+                if count == 0 {
+                    continue;
+                }
+                if let Some(score) =
+                    score_haystack(&pattern, &mut matcher, &mut buf, &artist.name)
+                {
+                    hits.push(SearchHit::Artist {
+                        key: artist.key.to_string(),
+                        name: artist.name.clone(),
+                        count,
+                        score,
+                    });
+                }
             }
         }
 
         // Albums: precomputed distinct (album, album artist) pairs.
-        for album in &self.albums {
-            let count = match subset {
-                Some(subset) => count_in(&album.songs, subset),
-                None => album.songs.len() as u32,
-            };
-            if count == 0 {
-                continue;
-            }
-            if let Some(score) = score_haystack(&pattern, &mut matcher, &mut buf, &album.haystack) {
-                hits.push(SearchHit::Album {
-                    name: album.name.clone(),
-                    artist: album.artist.clone(),
-                    count,
-                    score,
-                });
+        if kinds.album {
+            for album in &self.albums {
+                let count = match subset {
+                    Some(subset) => count_in(&album.songs, subset),
+                    None => album.songs.len() as u32,
+                };
+                if count == 0 {
+                    continue;
+                }
+                if let Some(score) =
+                    score_haystack(&pattern, &mut matcher, &mut buf, &album.haystack)
+                {
+                    hits.push(SearchHit::Album {
+                        name: album.name.clone(),
+                        artist: album.artist.clone(),
+                        count,
+                        score,
+                    });
+                }
             }
         }
 
         // Tracks: precomputed haystacks, no per-query string building.
-        let mut score_track = |i: usize| {
-            if let Some(score) =
-                score_haystack(&pattern, &mut matcher, &mut buf, &self.track_haystacks[i])
-            {
-                hits.push(SearchHit::Track {
-                    song: self.songs[i].clone(),
-                    score,
-                });
-            }
-        };
-        if let Some(subset) = subset {
-            for &i in subset {
-                score_track(i);
-            }
-        } else {
-            for i in 0..self.songs.len() {
-                score_track(i);
+        if kinds.track {
+            let mut score_track = |i: usize| {
+                if let Some(score) =
+                    score_haystack(&pattern, &mut matcher, &mut buf, &self.track_haystacks[i])
+                {
+                    hits.push(SearchHit::Track {
+                        song: self.songs[i].clone(),
+                        score,
+                    });
+                }
+            };
+            if let Some(subset) = subset {
+                for &i in subset {
+                    score_track(i);
+                }
+            } else {
+                for i in 0..self.songs.len() {
+                    score_track(i);
+                }
             }
         }
 
@@ -488,7 +538,7 @@ pub fn search(index: &LibraryIndex, query: &Query, limit: usize) -> Vec<SearchHi
         .map(str::trim)
         .filter(|t| !t.is_empty())
     {
-        Some(term) => index.fuzzy_rank(subset.as_deref(), term, limit),
+        Some(term) => index.fuzzy_rank(subset.as_deref(), query.kinds, term, limit),
         None => subset
             .unwrap_or_else(|| (0..index.len()).collect())
             .into_iter()
@@ -603,6 +653,7 @@ mod tests {
             &Query {
                 free_text: Some("alpha".into()),
                 exact: vec![],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -636,6 +687,7 @@ mod tests {
             &Query {
                 free_text: Some("BETA".into()),
                 exact: vec![],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -659,6 +711,7 @@ mod tests {
             &Query {
                 free_text: Some("zzz".into()),
                 exact: vec![],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -673,6 +726,7 @@ mod tests {
             &Query {
                 free_text: None,
                 exact: vec![(Field::Artist, "alpha".into())],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -691,6 +745,7 @@ mod tests {
             &Query {
                 free_text: None,
                 exact: vec![(Field::Genre, "jazz".into()), (Field::Title, "one".into())],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -704,6 +759,7 @@ mod tests {
                     (Field::Genre, "jazz".into()),
                     (Field::Title, "three".into()),
                 ],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -718,6 +774,7 @@ mod tests {
             &Query {
                 free_text: Some("two".into()),
                 exact: vec![(Field::Artist, "alpha".into())],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -730,6 +787,7 @@ mod tests {
             &Query {
                 free_text: Some("two".into()),
                 exact: vec![(Field::Artist, "beta".into())],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -746,6 +804,7 @@ mod tests {
             &Query {
                 free_text: Some("alpha".into()),
                 exact: vec![(Field::Genre, "jazz".into())],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -768,6 +827,7 @@ mod tests {
             &Query {
                 free_text: Some("gamma".into()),
                 exact: vec![],
+                ..Default::default()
             },
             DEFAULT_LIMIT,
         );
@@ -790,6 +850,7 @@ mod tests {
             &Query {
                 free_text: Some("a".into()),
                 exact: vec![],
+                ..Default::default()
             },
             2,
         );
@@ -839,7 +900,8 @@ mod tests {
                 &index,
                 &Query {
                     free_text: Some("   ".into()),
-                    exact: vec![]
+                    exact: vec![],
+                    ..Default::default()
                 },
                 DEFAULT_LIMIT
             )
@@ -854,5 +916,88 @@ mod tests {
         assert!(!index.is_empty());
         let empty = LibraryIndex::build(Vec::new());
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn free_text_respects_kind_filters() {
+        let index = indexed(library());
+        // Tracks only: just the two Alpha tracks, no artist/album hits leak in.
+        let tracks = search(
+            &index,
+            &Query {
+                free_text: Some("alpha".into()),
+                exact: vec![],
+                kinds: HitKinds {
+                    artist: false,
+                    album: false,
+                    track: true,
+                },
+            },
+            DEFAULT_LIMIT,
+        );
+        let files: Vec<_> = tracks
+            .iter()
+            .filter_map(|h| match h {
+                SearchHit::Track { song, .. } => Some(song.file.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|f| f.starts_with("alpha/")));
+
+        // Artists only: the single "Alpha" artist hit.
+        let artists = search(
+            &index,
+            &Query {
+                free_text: Some("alpha".into()),
+                exact: vec![],
+                kinds: HitKinds {
+                    artist: true,
+                    album: false,
+                    track: false,
+                },
+            },
+            DEFAULT_LIMIT,
+        );
+        assert_eq!(artists.len(), 1);
+        assert!(matches!(
+            &artists[0],
+            SearchHit::Artist { name, .. } if name == "Alpha"
+        ));
+
+        // No kinds enabled: nothing comes back.
+        let none = search(
+            &index,
+            &Query {
+                free_text: Some("alpha".into()),
+                exact: vec![],
+                kinds: HitKinds::NONE,
+            },
+            DEFAULT_LIMIT,
+        );
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn kind_filter_applies_before_limit() {
+        let index = indexed(library());
+        // "a" matches plenty of artists, albums and tracks. Capping at 2 with
+        // only tracks enabled must still yield 2 *track* hits — i.e. the filter
+        // runs before the cap, not after (which could leave zero tracks).
+        let hits = search(
+            &index,
+            &Query {
+                free_text: Some("a".into()),
+                exact: vec![],
+                kinds: HitKinds {
+                    artist: false,
+                    album: false,
+                    track: true,
+                },
+            },
+            2,
+        );
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|h| matches!(h, SearchHit::Track { .. })));
     }
 }
