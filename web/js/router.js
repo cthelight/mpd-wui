@@ -6,11 +6,14 @@
 //
 // #nowplaying                            Now Playing
 // #queue                                 Queue
-// #library                               Library, browse at the Music root
-// #library/browse/<segment>/…            Library browse, path = segments joined
-// #library/collections                   Collections, type picker
-// #library/collections/<type>/<value>/…  Collection drill (≤ 3 frames)
+// #library                               Library, Artists (the default tab)
+// #library/<type>/<value>/…              Collection drill (≤ 3 frames)
+// #library/files/<segment>/…             Library files, path = segments joined
 // #library/search?q=<query>              Search results
+//
+// Legacy forms still parse: #library/browse/… (files) and
+// #library/collections/<type>/… (the type tabs used to sit under a
+// "Collections" tab).
 
 export const COLLECTION_TYPES = [
   { key: "artist", label: "Artists" },
@@ -22,6 +25,11 @@ export const COLLECTION_TYPES = [
 
 export function labelFor(key) {
   return COLLECTION_TYPES.find((item) => item.key === key)?.label ?? key;
+}
+
+// The library's default place: the first tab (Artists) at its top level.
+export function defaultLibraryRoute() {
+  return { view: "library", mode: "artist", coll: [{ key: "artist", label: labelFor("artist") }] };
 }
 
 function decode(segment) {
@@ -61,29 +69,32 @@ export function parseRoute(hash) {
     case "queue":
       return { view: "queue" };
     case "library": {
-      const [mode = "browse", ...rest] = segments.slice(1);
-      if (mode === "browse")
+      let rest = segments.slice(1);
+      if (rest[0] === "collections") rest = rest.slice(1); // legacy
+      const [mode, ...segRest] = rest;
+      if (mode === undefined) return defaultLibraryRoute();
+      if (mode === "browse" || mode === "files")
         return {
           view: "library",
           mode: "browse",
-          browsePath: rest.map(decode).join("/"),
+          browsePath: segRest.map(decode).join("/"),
         };
-      if (mode === "collections")
+      if (COLLECTION_TYPES.some((item) => item.key === mode))
         return {
           view: "library",
-          mode: "collections",
+          mode,
           coll: collFrom(
-            rest[0],
-            rest[1] != null ? decode(rest[1]) : null,
-            rest[2] != null ? decode(rest[2]) : null
+            mode,
+            segRest[0] != null ? decode(segRest[0]) : null,
+            segRest[1] != null ? decode(segRest[1]) : null
           ),
         };
       if (mode === "search") {
         const text = new URLSearchParams(query).get("q") || "";
-        // An empty search is not a place: fall back to the browse root.
+        // An empty search is not a place: fall back to the library default.
         return text
           ? { view: "library", mode: "search", query: text }
-          : { view: "library", mode: "browse", browsePath: "" };
+          : defaultLibraryRoute();
       }
       return { view: "nowplaying" };
     }
@@ -97,17 +108,19 @@ export function routeToHash(route) {
   if (route.view === "nowplaying") return "#nowplaying";
   if (route.view === "queue") return "#queue";
   if (route.mode === "search") return `#library/search?q=${encodeURIComponent(route.query)}`;
-  if (route.mode === "collections") {
-    const [type, value1, value2] = route.coll || [];
-    let hash = "#library/collections";
-    if (type) hash += `/${type.key}`;
-    if (value1) hash += `/${encodeURIComponent(value1.value)}`;
-    if (value2) hash += `/${encodeURIComponent(value2.value)}`;
-    return hash;
+  if (route.mode === "browse") {
+    const segments = (route.browsePath || "")
+      .split("/")
+      .filter((segment) => segment !== "")
+      .map(encodeURIComponent);
+    return segments.length ? `#library/files/${segments.join("/")}` : "#library/files";
   }
-  const segments = (route.browsePath || "")
-    .split("/")
-    .filter((segment) => segment !== "")
-    .map(encodeURIComponent);
-  return segments.length ? `#library/browse/${segments.join("/")}` : "#library";
+  // Collection: the mode is the collection type (the first stack frame).
+  const [, value1, value2] = route.coll || [];
+  // The top-level Artists view is the library home; keep it as bare #library.
+  if (route.mode === "artist" && !value1) return "#library";
+  let hash = `#library/${route.mode}`;
+  if (value1) hash += `/${encodeURIComponent(value1.value)}`;
+  if (value2) hash += `/${encodeURIComponent(value2.value)}`;
+  return hash;
 }

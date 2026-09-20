@@ -2,7 +2,7 @@ import { get, post } from "./api.js";
 import { icon } from "./icons.js";
 import { formatTime } from "./nowplaying.js";
 import { escapeHtml, toast } from "./util.js";
-import { COLLECTION_TYPES, labelFor, routeToHash } from "./router.js";
+import { COLLECTION_TYPES, defaultLibraryRoute, labelFor, routeToHash } from "./router.js";
 
 function targetForValue(key, value) {
   if (key === "artist") return { artist: value };
@@ -217,8 +217,11 @@ export function mountLibrary(container, navigate, initialRoute) {
         </label>
       </div>
       <nav class="library-tabs" data-tabs>
-        <button class="lib-tab active" data-mode="browse">Browse</button>
-        <button class="lib-tab" data-mode="collections">Collections</button>
+        ${COLLECTION_TYPES.map(
+          (item, i) =>
+            `<button class="lib-tab${i === 0 ? " active" : ""}" data-mode="${item.key}">${item.label}</button>`
+        ).join("")}
+        <button class="lib-tab" data-mode="browse">Files</button>
       </nav>
       <div class="library-body">
         <section class="lib-pane" data-pane="browse">
@@ -226,11 +229,6 @@ export function mountLibrary(container, navigate, initialRoute) {
           <div class="list" data-browse-list></div>
         </section>
         <section class="lib-pane" data-pane="collections" hidden>
-          <div class="coll-types" data-coll-types>
-            ${COLLECTION_TYPES.map(
-              (item) => `<button class="coll-type" data-coll-type="${item.key}">${item.label}</button>`
-            ).join("")}
-          </div>
           <div class="breadcrumb" data-coll-crumb></div>
           <div class="list" data-coll-list></div>
         </section>
@@ -258,11 +256,24 @@ export function mountLibrary(container, navigate, initialRoute) {
   const collStore = { rows: [] };
   const searchStore = { rows: [] };
 
-  let activeMode = "browse";
+  let activeMode = "artist";
   let browsePath = "";
   let browseToken = 0;
   let collStack = [];
   let collToken = 0;
+
+  // Each tab keeps its own state (files path / collection drill stack), so
+  // switching tabs and back resumes each one exactly where it was left.
+  const modeStates = {};
+  function stateFor(mode) {
+    return (
+      modeStates[mode] ??
+      (modeStates[mode] =
+        mode === "browse"
+          ? { browsePath: "" }
+          : { coll: [{ key: mode, label: labelFor(mode) }] })
+    );
+  }
   let searchTimer;
   let searchController;
   // The last route this view applied; empty until the first restore so the
@@ -271,7 +282,7 @@ export function mountLibrary(container, navigate, initialRoute) {
 
   function showMode() {
     browsePane.hidden = activeMode !== "browse";
-    collPane.hidden = activeMode !== "collections";
+    collPane.hidden = activeMode === "browse";
     searchPane.hidden = true;
     tabs.hidden = false;
     container.querySelectorAll("[data-mode]").forEach((button) => {
@@ -330,7 +341,7 @@ export function mountLibrary(container, navigate, initialRoute) {
     if (!collStack.length) {
       const label = document.createElement("span");
       label.className = "crumb current";
-      label.textContent = "Collections";
+      label.textContent = labelFor(activeMode);
       collCrumb.append(label);
       return;
     }
@@ -350,7 +361,7 @@ export function mountLibrary(container, navigate, initialRoute) {
         if (targetLength === collStack.length) return;
         navigate({
           view: "library",
-          mode: "collections",
+          mode: collStack[0].key,
           coll: collStack.slice(0, targetLength),
         });
       });
@@ -358,17 +369,9 @@ export function mountLibrary(container, navigate, initialRoute) {
     });
   }
 
-  function updateCollTypeButtons() {
-    const active = collStack[0]?.key;
-    container.querySelectorAll("[data-coll-type]").forEach((button) => {
-      button.classList.toggle("active", button.dataset.collType === active);
-    });
-  }
-
   async function loadCollection() {
     const token = ++collToken;
     renderCollBreadcrumb();
-    updateCollTypeButtons();
     if (!collStack.length) {
       setMessage(collList, collStore, "Choose a collection");
       return;
@@ -410,14 +413,10 @@ export function mountLibrary(container, navigate, initialRoute) {
     }
   }
 
-  function selectCollType(key) {
-    navigate({ view: "library", mode: "collections", coll: [{ key, label: labelFor(key) }] });
-  }
-
   function selectCollValue(data) {
     navigate({
       view: "library",
-      mode: "collections",
+      mode: collStack[0].key,
       coll: [...collStack, { key: data.targetKey, value: data.title, label: data.title }],
     });
   }
@@ -443,16 +442,16 @@ export function mountLibrary(container, navigate, initialRoute) {
         { key: "album", value: nav.album, label: nav.album },
       ];
     }
-    navigate({ view: "library", mode: "collections", coll });
+    navigate({ view: "library", mode: coll[0].key, coll });
   }
 
   // The route this view is currently showing: the search query when the
-  // search pane is up, otherwise the browse/collections state (both of which
-  // stay alive while searching).
+  // search pane is up, otherwise the active tab's state (files path or
+  // collection stack; each stays alive while searching).
   function preSearchRoute() {
     return activeMode === "browse"
       ? { view: "library", mode: "browse", browsePath }
-      : { view: "library", mode: "collections", coll: collStack };
+      : { view: "library", mode: activeMode, coll: collStack };
   }
 
   function route() {
@@ -519,11 +518,14 @@ export function mountLibrary(container, navigate, initialRoute) {
     searchInput.value = "";
     activeMode = route.mode;
     showMode();
-    if (route.mode === "browse") {
-      browsePath = route.browsePath || "";
+    const state = stateFor(activeMode);
+    if (activeMode === "browse") {
+      state.browsePath = route.browsePath || "";
+      browsePath = state.browsePath;
       loadBrowse();
     } else {
-      collStack = route.coll || [];
+      state.coll = route.coll?.length ? route.coll : state.coll;
+      collStack = state.coll;
       loadCollection();
     }
   }
@@ -535,25 +537,20 @@ export function mountLibrary(container, navigate, initialRoute) {
   container.querySelectorAll("[data-mode]").forEach((button) => {
     button.addEventListener("click", () => {
       const mode = button.dataset.mode;
-      // Each mode keeps its own state (browse path / collection stack), so
-      // switching and back-and-forth resumes exactly where it was.
+      const state = stateFor(mode);
       navigate(
         mode === "browse"
-          ? { view: "library", mode: "browse", browsePath }
-          : { view: "library", mode: "collections", coll: collStack }
+          ? { view: "library", mode: "browse", browsePath: state.browsePath }
+          : { view: "library", mode, coll: state.coll }
       );
     });
   });
 
-  container.querySelectorAll("[data-coll-type]").forEach((button) => {
-    button.addEventListener("click", () => selectCollType(button.dataset.collType));
-  });
-
   searchInput.addEventListener("input", onSearchInput);
 
-  // The app passes the route the user arrived on (a deep link, or the browse
-  // root on a first visit) so the initial load matches the URL.
-  restore(initialRoute ?? { view: "library", mode: "browse", browsePath: "" });
+  // The app passes the route the user arrived on (a deep link, or the default
+  // Artists tab on a first visit) so the initial load matches the URL.
+  restore(initialRoute ?? defaultLibraryRoute());
 
   function refresh() {
     if (!searchPane.hidden) startSearch(searchInput.value.trim());

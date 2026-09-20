@@ -4,7 +4,7 @@ import { config } from "./config.js";
 import { mountNowPlaying, renderMiniPlayer } from "./nowplaying.js";
 import { mountQueue } from "./queue.js";
 import { mountLibrary } from "./library.js";
-import { parseRoute, routeToHash } from "./router.js";
+import { defaultLibraryRoute, parseRoute, routeToHash } from "./router.js";
 import { toast } from "./util.js";
 
 function fail(err) {
@@ -172,7 +172,7 @@ function ensureView(name) {
   } else if (name === "library") {
     // The pane is only mounted while it is the active view, so the current
     // route is a library route; passing it in makes a deep link apply its
-    // full state instead of loading the browse root first.
+    // full state instead of loading the default tab first.
     libraryView = mountLibrary(pane, navigate, currentRoute);
     mountedViews.push(libraryView);
   }
@@ -266,10 +266,10 @@ function loadInitial() {
   probeMpd();
 }
 
-// The library tab resumes the library where it was left (browse path,
-// collection drill or search), since its pane is kept alive.
+// The library tab resumes the library where it was left (active tab, files
+// path, collection drill or search), since its pane is kept alive.
 function libraryRoute() {
-  return libraryView?.route() ?? { view: "library", mode: "browse", browsePath: "" };
+  return libraryView?.route() ?? defaultLibraryRoute();
 }
 
 document.querySelectorAll(".tab").forEach((button) => {

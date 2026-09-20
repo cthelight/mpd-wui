@@ -385,10 +385,8 @@ input[type="range"] {
   border-radius: 999px;
   color: var(--fg-dim);
 }
-.lib-tab.active,
-.coll-type.active { color: var(--accent); border-color: var(--accent); }
-.lib-tab:hover,
-.coll-type:hover { color: var(--fg); }
+.lib-tab.active { color: var(--accent); border-color: var(--accent); }
+.lib-tab:hover { color: var(--fg); }
 
 .library-body { min-height: 240px; }
 .lib-pane { display: grid; gap: 12px; }
@@ -447,14 +445,6 @@ input[type="range"] {
   color: var(--fg-dim);
 }
 .show-more:hover { color: var(--fg); border-color: var(--accent); }
-
-.coll-types { display: flex; gap: 8px; flex-wrap: wrap; }
-.coll-type {
-  padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--fg-dim);
-}
 
 .empty,
 .error {
