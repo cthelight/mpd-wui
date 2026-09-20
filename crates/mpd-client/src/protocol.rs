@@ -400,10 +400,13 @@ pub fn parse_lsinfo(resp: &Response) -> Browse {
 /// Parse a `list` command into the values for a single tag (e.g. `artist`).
 ///
 /// MPD replies with the canonical (capitalized) tag name, e.g. `Artist: X`,
-/// so the lookup key is normalized before reading the response.
+/// so the lookup key is normalized before reading the response. Songs with a
+/// missing tag produce an empty value; those are dropped so the UI never
+/// shows blank entries.
 pub fn parse_list(resp: &Response, tag: &str) -> Vec<String> {
     resp.get_all(canonical_tag(tag))
         .iter()
+        .filter(|s| !s.trim().is_empty())
         .map(|s| s.to_string())
         .collect()
 }
@@ -542,6 +545,17 @@ mod tests {
         assert_eq!(
             parse_list(&parse_text(raw2), "genre"),
             vec!["Jazz".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_list_drops_empty_values() {
+        // Songs with a missing tag make MPD emit an empty value.
+        let raw = "Artist: A\nArtist: \nArtist: B\nArtist:   \nOK\n";
+        let r = parse_text(raw);
+        assert_eq!(
+            parse_list(&r, "artist"),
+            vec!["A".to_string(), "B".to_string()]
         );
     }
 
