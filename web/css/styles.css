@@ -26,13 +26,24 @@ html, body {
   font-size: 15px;
 }
 
-#app { display: flex; flex-direction: column; height: 100vh; }
+#app {
+  display: flex;
+  flex-direction: column;
+  /* The document itself never scrolls (views scroll internally), so the app
+     must exactly fill the *visible* viewport. On mobile browsers with a
+     dynamic address bar, 100vh is the large (bar-less) viewport and would
+     push the minibar behind the chrome; 100dvh tracks the visible height. */
+  height: 100vh;
+  height: 100dvh;
+}
 
 .topbar {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
+  /* Fullscreen/PWA: keep content clear of the status bar. */
+  padding-top: max(10px, env(safe-area-inset-top));
   border-bottom: 1px solid var(--line);
 }
 
@@ -83,6 +94,8 @@ html, body {
 .minibar {
   border-top: 1px solid var(--line);
   padding: 10px 16px;
+  /* Fullscreen/PWA: keep controls clear of the home indicator. */
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
 }
 
 button {
@@ -242,16 +255,6 @@ input[type="range"] {
 
 .mini-progress { max-width: 320px; }
 .mini-controls { display: flex; gap: 8px; }
-
-@media (max-width: 700px) {
-  .mini-progress { display: none; }
-  .np-art,
-  .np-art img {
-    width: 180px;
-    height: 180px;
-  }
-  .np-extra { justify-content: center; }
-}
 
 .queue-view,
 .library {
@@ -462,13 +465,6 @@ input[type="range"] {
 }
 .error { color: var(--err); border-color: var(--err); }
 
-@media (max-width: 700px) {
-  .queue-row { grid-template-columns: auto 1fr auto auto; }
-  .queue-index { display: none; }
-  .queue-handle { display: none; }
-  .row-actions { opacity: 1; }
-}
-
 .toasts {
   position: fixed;
   bottom: 76px;
@@ -500,3 +496,59 @@ input[type="range"] {
   white-space: nowrap;
 }
 .toast.show { opacity: 1; transform: translateY(0); }
+
+/* Mobile (kept last so it wins the cascade): a layout that fits a narrow
+   column, with thumb-sized touch targets. */
+@media (max-width: 700px) {
+  .topbar {
+    gap: 8px;
+    padding: 8px 12px;
+    padding-top: max(8px, env(safe-area-inset-top));
+  }
+  /* Icon-only wordmark keeps the three tabs on one row down to ~320px. */
+  .wordmark-text { display: none; }
+  .tabs { gap: 2px; }
+  .tab {
+    min-width: 0;
+    padding: 7px 8px;
+    font-size: 0.92em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The mini-player becomes two rows: art/track/transport share the first,
+     and the seek bar keeps a full-width row of its own, so seeking stays
+     available on a phone instead of being dropped. */
+  .mini { grid-template-columns: auto 1fr auto; gap: 10px 14px; }
+  .mini-art { grid-row: 1; grid-column: 1; }
+  .mini-meta { grid-row: 1; grid-column: 2; }
+  .mini-controls { grid-row: 1; grid-column: 3; }
+  .mini-progress { grid-row: 2; grid-column: 1 / -1; max-width: none; }
+  .mini .ctl.small { width: 40px; height: 40px; }
+  .mini .ctl.small.primary { width: 48px; height: 48px; }
+  .mini .ctl.small svg { width: 20px; height: 20px; }
+  .mini .ctl.small.primary svg { width: 24px; height: 24px; }
+
+  .np-art,
+  .np-art img {
+    width: 180px;
+    height: 180px;
+  }
+  .np-extra { justify-content: center; }
+
+  /* A native slider's touch target is its element box; taller = usable. */
+  input[type="range"] { height: 28px; }
+  .view-pane { padding: 12px; }
+  .queue-row {
+    grid-template-columns: auto 1fr auto auto;
+    padding: 10px;
+  }
+  .queue-index { display: none; }
+  .queue-handle { display: none; }
+  .row-btn { width: 34px; height: 34px; }
+  .row-actions { opacity: 1; }
+
+  /* The minibar is taller on mobile; keep toasts above it. */
+  .toasts { bottom: calc(116px + env(safe-area-inset-bottom)); }
+}
