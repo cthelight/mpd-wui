@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import { mountNowPlaying, renderMiniPlayer } from "./nowplaying.js";
 import { mountQueue } from "./queue.js";
 import { mountLibrary } from "./library.js";
+import { parseRoute, routeToHash } from "./router.js";
 import { toast } from "./util.js";
 
 function fail(err) {
@@ -165,7 +166,11 @@ function ensureView(name) {
   } else if (name === "queue") {
     mountedViews.push(mountQueue(pane, state));
   } else if (name === "library") {
-    mountedViews.push(mountLibrary(pane));
+    // The pane is only mounted while it is the active view, so the current
+    // route is a library route; passing it in makes a deep link apply its
+    // full state instead of loading the browse root first.
+    libraryView = mountLibrary(pane, navigate, currentRoute);
+    mountedViews.push(libraryView);
   }
 }
 
@@ -174,14 +179,36 @@ function renderView() {
   for (const name in viewPanes) viewPanes[name].hidden = name !== state.view;
 }
 
-function setView(view) {
-  state.view = view;
+// Navigation is driven by the location hash (see router.js): every view
+// change is a history entry, so the browser back/forward buttons undo (and
+// redo) navigation steps, and any view reloads and shares as a URL.
+let currentHash = "";
+let currentRoute = null;
+let libraryView = null;
+
+function applyRoute(route) {
+  currentRoute = route;
+  const switched = route.view !== state.view;
+  state.view = route.view;
+  // Synced on every apply (not just on a switch) so the first apply — which
+  // may re-select an already-active tab — still lands on a consistent state.
   document.querySelectorAll(".tab").forEach((button) => {
-    const active = button.dataset.view === view;
+    const active = button.dataset.view === route.view;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
-  renderView();
+  if (switched) renderView();
+  if (route.view === "library") libraryView?.restore(route);
+}
+
+function navigate(route, replace = false) {
+  const hash = routeToHash(route);
+  if (hash === currentHash) return false;
+  if (replace) history.replaceState(null, "", hash);
+  else history.pushState(null, "", hash);
+  currentHash = hash;
+  applyRoute(route);
+  return true;
 }
 
 let wsAttempts = 0;
@@ -235,8 +262,17 @@ function loadInitial() {
   probeMpd();
 }
 
+// The library tab resumes the library where it was left (browse path,
+// collection drill or search), since its pane is kept alive.
+function libraryRoute() {
+  return libraryView?.route() ?? { view: "library", mode: "browse", browsePath: "" };
+}
+
 document.querySelectorAll(".tab").forEach((button) => {
-  button.addEventListener("click", () => setView(button.dataset.view));
+  button.addEventListener("click", () => {
+    const view = button.dataset.view;
+    navigate(view === "library" ? libraryRoute() : { view });
+  });
 });
 
 document.querySelector("[data-banner-retry]")?.addEventListener("click", () => {
@@ -304,7 +340,25 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-setView("nowplaying");
+function onHistoryChange() {
+  // Back/forward (popstate) and a hand-edited hash (hashchange) both land
+  // here; the hash guard makes the double-fire of a single traversal a no-op.
+  const hash = location.hash;
+  if (hash === currentHash) return;
+  currentHash = hash;
+  applyRoute(parseRoute(hash));
+}
+window.addEventListener("popstate", onHistoryChange);
+window.addEventListener("hashchange", onHistoryChange);
+
+// Initial route: a reloaded or shared deep link applies immediately, and the
+// hash is normalized so the bar always reflects the current view.
+{
+  const route = parseRoute(location.hash);
+  currentHash = routeToHash(route);
+  if (location.hash !== currentHash) history.replaceState(null, "", currentHash);
+  applyRoute(route);
+}
 loadInitial();
 connect();
 

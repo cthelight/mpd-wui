@@ -20,6 +20,9 @@ server.
 - Add or play songs, albums, artists, genres, years, and folders into the
   queue
 - Live status over WebSocket with locally interpolated progress
+- Browser back/forward support: every view change (tab, browse level,
+  collection drill, search) is a history entry, and any view reloads or
+  shares as a URL (`#/queue`, `#/library/browse/Artist/Album`, …)
 - Dark, minimal UI with no frontend dependencies or build step
 
 ## Quickstart

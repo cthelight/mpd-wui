@@ -2,18 +2,7 @@ import { get, post } from "./api.js";
 import { icon } from "./icons.js";
 import { formatTime } from "./nowplaying.js";
 import { escapeHtml, toast } from "./util.js";
-
-const COLLECTION_TYPES = [
-  { key: "artist", label: "Artists" },
-  { key: "albumartist", label: "Album Artists" },
-  { key: "album", label: "Albums" },
-  { key: "genre", label: "Genres" },
-  { key: "date", label: "Years" },
-];
-
-function labelFor(key) {
-  return COLLECTION_TYPES.find((item) => item.key === key)?.label ?? key;
-}
+import { COLLECTION_TYPES, labelFor, routeToHash } from "./router.js";
 
 function targetForValue(key, value) {
   if (key === "artist") return { artist: value };
@@ -218,7 +207,7 @@ function bindList(list, store, onDrill) {
   });
 }
 
-export function mountLibrary(container) {
+export function mountLibrary(container, navigate, initialRoute) {
   container.innerHTML = `
     <section class="library">
       <div class="library-search">
@@ -276,6 +265,9 @@ export function mountLibrary(container) {
   let collToken = 0;
   let searchTimer;
   let searchController;
+  // The last route this view applied; empty until the first restore so the
+  // mount-time initial route always takes effect.
+  let appliedHash = "";
 
   function showMode() {
     browsePane.hidden = activeMode !== "browse";
@@ -330,8 +322,7 @@ export function mountLibrary(container) {
   }
 
   function navigateBrowse(path) {
-    browsePath = path;
-    loadBrowse();
+    navigate({ view: "library", mode: "browse", browsePath: path });
   }
 
   function renderCollBreadcrumb() {
@@ -357,8 +348,11 @@ export function mountLibrary(container) {
       crumb.addEventListener("click", () => {
         const targetLength = index + 1;
         if (targetLength === collStack.length) return;
-        collStack = collStack.slice(0, targetLength);
-        loadCollection();
+        navigate({
+          view: "library",
+          mode: "collections",
+          coll: collStack.slice(0, targetLength),
+        });
       });
       collCrumb.append(crumb);
     });
@@ -417,56 +411,65 @@ export function mountLibrary(container) {
   }
 
   function selectCollType(key) {
-    activeMode = "collections";
-    collStack = [{ key, label: labelFor(key) }];
-    showMode();
-    loadCollection();
+    navigate({ view: "library", mode: "collections", coll: [{ key, label: labelFor(key) }] });
   }
 
   function selectCollValue(data) {
-    collStack.push({ key: data.targetKey, value: data.title, label: data.title });
-    loadCollection();
+    navigate({
+      view: "library",
+      mode: "collections",
+      coll: [...collStack, { key: data.targetKey, value: data.title, label: data.title }],
+    });
   }
 
   // Jump from a search hit straight to the collection that shows the item in
   // full: an artist lists their albums; an album lists its songs.
   function drillIntoSearchHit(nav) {
+    let coll;
     if (nav.type === "artist") {
-      collStack = [
+      coll = [
         { key: nav.key, label: labelFor(nav.key) },
         { key: nav.key, value: nav.name, label: nav.name },
       ];
     } else if (nav.albumartist) {
-      collStack = [
+      coll = [
         { key: "albumartist", label: labelFor("albumartist") },
         { key: "albumartist", value: nav.albumartist, label: nav.albumartist },
         { key: "album", value: nav.album, label: nav.album },
       ];
     } else {
-      collStack = [
+      coll = [
         { key: "album", label: labelFor("album") },
         { key: "album", value: nav.album, label: nav.album },
       ];
     }
-    activeMode = "collections";
-    showMode();
-    loadCollection();
+    navigate({ view: "library", mode: "collections", coll });
   }
 
-  function onSearchInput() {
+  // The route this view is currently showing: the search query when the
+  // search pane is up, otherwise the browse/collections state (both of which
+  // stay alive while searching).
+  function preSearchRoute() {
+    return activeMode === "browse"
+      ? { view: "library", mode: "browse", browsePath }
+      : { view: "library", mode: "collections", coll: collStack };
+  }
+
+  function route() {
     const query = searchInput.value.trim();
-    clearTimeout(searchTimer);
-    searchController?.abort();
+    return query ? { view: "library", mode: "search", query } : preSearchRoute();
+  }
 
-    if (!query) {
-      showMode();
-      return;
-    }
-
-    searchPane.hidden = false;
-    tabs.hidden = true;
+  function showSearch() {
     browsePane.hidden = true;
     collPane.hidden = true;
+    searchPane.hidden = false;
+    tabs.hidden = true;
+  }
+
+  function startSearch(query) {
+    clearTimeout(searchTimer);
+    searchController?.abort();
     searchCrumb.textContent = `Search: ${query}`;
     setMessage(searchList, searchStore, "Searching…");
 
@@ -484,15 +487,61 @@ export function mountLibrary(container) {
     }, 250);
   }
 
+  function onSearchInput() {
+    const query = searchInput.value.trim();
+    if (query) {
+      // The first keystroke pushes a history entry (so back exits the search
+      // in one step, to the view shown before searching); further keystrokes
+      // replace that entry instead of stacking one per character.
+      const alreadySearching = appliedHash.startsWith("#library/search?");
+      // A no-op navigate means the entry already holds this query; re-run the
+      // search directly (this is also the refresh() path).
+      if (!navigate({ view: "library", mode: "search", query }, alreadySearching))
+        startSearch(query);
+    } else {
+      navigate(preSearchRoute(), true);
+    }
+  }
+
+  // Apply a route (initial load, tab resume, or back/forward). Comparing
+  // hashes makes re-applying the current view a no-op, which keeps the
+  // kept-alive state (scroll, "show more" pages) intact.
+  function restore(route) {
+    const hash = routeToHash(route);
+    if (hash === appliedHash) return;
+    appliedHash = hash;
+    if (route.mode === "search") {
+      searchInput.value = route.query;
+      showSearch();
+      startSearch(route.query);
+      return;
+    }
+    searchInput.value = "";
+    activeMode = route.mode;
+    showMode();
+    if (route.mode === "browse") {
+      browsePath = route.browsePath || "";
+      loadBrowse();
+    } else {
+      collStack = route.coll || [];
+      loadCollection();
+    }
+  }
+
   bindList(browseList, browseStore, (data) => navigateBrowse(data.path));
   bindList(collList, collStore, selectCollValue);
   bindList(searchList, searchStore, (data) => drillIntoSearchHit(data.nav));
 
   container.querySelectorAll("[data-mode]").forEach((button) => {
     button.addEventListener("click", () => {
-      activeMode = button.dataset.mode;
-      showMode();
-      if (activeMode === "collections" && !collStack.length) loadCollection();
+      const mode = button.dataset.mode;
+      // Each mode keeps its own state (browse path / collection stack), so
+      // switching and back-and-forth resumes exactly where it was.
+      navigate(
+        mode === "browse"
+          ? { view: "library", mode: "browse", browsePath }
+          : { view: "library", mode: "collections", coll: collStack }
+      );
     });
   });
 
@@ -502,11 +551,12 @@ export function mountLibrary(container) {
 
   searchInput.addEventListener("input", onSearchInput);
 
-  showMode();
-  loadBrowse();
+  // The app passes the route the user arrived on (a deep link, or the browse
+  // root on a first visit) so the initial load matches the URL.
+  restore(initialRoute ?? { view: "library", mode: "browse", browsePath: "" });
 
   function refresh() {
-    if (!searchPane.hidden) onSearchInput();
+    if (!searchPane.hidden) startSearch(searchInput.value.trim());
     else if (activeMode === "browse") loadBrowse();
     else loadCollection();
   }
@@ -515,5 +565,7 @@ export function mountLibrary(container) {
     update() {},
     progress() {},
     refresh,
+    restore,
+    route,
   };
 }
