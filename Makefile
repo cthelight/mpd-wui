@@ -26,8 +26,10 @@ build: ## Build the debug binary
 run: ## Run the debug binary
 	cargo run -p mpd-wui
 
-release: ## Build the release binary
-	cargo build --release --locked -p mpd-wui
+MUSL_TARGET ?= x86_64-unknown-linux-musl
+
+release: ## Build the static release binary (musl, ships in the Docker image)
+	cargo build --release --locked --target $(MUSL_TARGET) -p mpd-wui
 
 docker: ## Build the Docker image
 	docker build -t mpd-wui:latest .

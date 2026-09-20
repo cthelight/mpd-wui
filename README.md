@@ -112,8 +112,9 @@ MPD_HOST=host.docker.internal MPD_PORT=6600 docker compose up --build
 The compose file maps the container port to `${PORT:-8080}` and forwards
 `MPD_HOST`, `MPD_PORT`, `MPD_PASSWORD`, `CACHE_TTL`, and `RUST_LOG`.
 
-The image is multi-stage and ships only the release binary in a non-root
-`debian:stable-slim` container.
+The image is multi-stage: the binary is built for musl (statically linked)
+and copied into a non-root `scratch` container, so the image is the single
+binary and nothing else.
 
 ## Development
 
