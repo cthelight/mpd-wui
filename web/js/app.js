@@ -120,7 +120,7 @@ const actions = {
 };
 
 let mountedViews = [];
-let miniView = renderMiniPlayer(miniEl, actions);
+let miniView = renderMiniPlayer(miniEl, actions, navigate);
 mountedViews.push(miniView);
 
 function renderSnapshot() {
@@ -273,6 +273,12 @@ document.querySelectorAll(".tab").forEach((button) => {
     const view = button.dataset.view;
     navigate(view === "library" ? libraryRoute() : { view });
   });
+});
+
+// The wordmark is the app's home affordance: clicking it returns to the Now
+// Playing view, matching the mini-player's art/track-info shortcut.
+document.querySelector(".wordmark")?.addEventListener("click", () => {
+  navigate({ view: "nowplaying" });
 });
 
 document.querySelector("[data-banner-retry]")?.addEventListener("click", () => {

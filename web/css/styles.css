@@ -36,7 +36,8 @@ html, body {
   border-bottom: 1px solid var(--line);
 }
 
-.wordmark { font-weight: 600; letter-spacing: 0.02em; }
+.wordmark { font-weight: 600; letter-spacing: 0.02em; cursor: pointer; }
+.wordmark:hover { color: var(--accent); }
 .wordmark-icon { vertical-align: middle; margin-right: 8px; }
 
 .conn { width: 9px; height: 9px; border-radius: 50%; background: var(--err); }
@@ -232,6 +233,12 @@ input[type="range"] {
   text-overflow: ellipsis;
 }
 .mini-artist { color: var(--fg-dim); font-size: 0.9em; }
+
+/* The mini-player's art and track info are shortcuts back to Now Playing. */
+.mini-art,
+.mini-meta { cursor: pointer; }
+.mini-art:hover { opacity: 0.85; }
+.mini-meta:hover .mini-title { color: var(--accent); }
 
 .mini-progress { max-width: 320px; }
 .mini-controls { display: flex; gap: 8px; }

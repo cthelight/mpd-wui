@@ -224,7 +224,7 @@ export function mountNowPlaying(container, actions) {
   };
 }
 
-export function renderMiniPlayer(container, actions) {
+export function renderMiniPlayer(container, actions, navigate) {
   container.innerHTML = `
     <div class="mini">
       <div class="mini-art" data-art></div>
@@ -246,6 +246,12 @@ export function renderMiniPlayer(container, actions) {
   `;
   bindTransport(container, actions);
   bindSeek(container, actions);
+  // The mini-player is the always-visible "what's playing" surface, so its art
+  // and track info double as a shortcut back to the Now Playing view from any
+  // other view. On Now Playing itself navigate() bails early (same hash).
+  const goNowPlaying = () => navigate({ view: "nowplaying" });
+  container.querySelector(".mini-art")?.addEventListener("click", goNowPlaying);
+  container.querySelector(".mini-meta")?.addEventListener("click", goNowPlaying);
   return {
     update: makeUpdate(container),
     progress: makeProgress(container),
