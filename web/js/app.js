@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import { mountNowPlaying, renderMiniPlayer } from "./nowplaying.js";
 import { mountQueue } from "./queue.js";
 import { mountLibrary } from "./library.js";
+import { mountSettings } from "./settings.js";
 import { defaultLibraryRoute, parseRoute, routeToHash } from "./router.js";
 import { toast } from "./util.js";
 
@@ -175,6 +176,8 @@ function ensureView(name) {
     // full state instead of loading the default tab first.
     libraryView = mountLibrary(pane, navigate, currentRoute);
     mountedViews.push(libraryView);
+  } else if (name === "settings") {
+    mountedViews.push(mountSettings(pane));
   }
 }
 

@@ -10,9 +10,9 @@ use tokio::sync::{RwLock, broadcast, mpsc, oneshot, watch};
 
 use crate::protocol::{
     Response, build_search_filters, parse_art, parse_currentsong, parse_list, parse_lsinfo,
-    parse_song_list, parse_status, parse_text, quote_arg, sniff_mime,
+    parse_song_list, parse_stats, parse_status, parse_text, quote_arg, sniff_mime,
 };
-use crate::types::{Browse, Capabilities, MpdEvent, Snapshot, Song, Status};
+use crate::types::{Browse, Capabilities, DbStats, MpdEvent, Snapshot, Song, Status};
 
 /// Connection settings for an MPD server.
 #[derive(Debug, Clone)]
@@ -128,6 +128,41 @@ impl MpdClient {
 
     pub async fn status(&self) -> anyhow::Result<Status> {
         Ok(parse_status(&self.cmd("status").await?))
+    }
+
+    pub async fn stats(&self) -> anyhow::Result<DbStats> {
+        Ok(parse_stats(&self.cmd("stats").await?))
+    }
+
+    /// Ask the server to update its database, optionally limited to a directory.
+    ///
+    /// Returns the `updating_db` id reported by the server; while the server is
+    /// updating, [`Self::status`] reports `updating == true`.
+    pub async fn update(&self, path: Option<&str>) -> anyhow::Result<u32> {
+        let cmd = match path {
+            Some(p) => format!("update {}", quote_arg(p)),
+            None => "update".to_string(),
+        };
+        let resp = self.cmd(&cmd).await?;
+        Ok(resp
+            .get("updating_db")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0))
+    }
+
+    /// Ask the server to rescan its database, re-parsing metadata (MPD ≥ 0.22).
+    ///
+    /// Returns the `scanning_db` id reported by the server.
+    pub async fn rescan(&self, path: Option<&str>) -> anyhow::Result<u32> {
+        let cmd = match path {
+            Some(p) => format!("rescan {}", quote_arg(p)),
+            None => "rescan".to_string(),
+        };
+        let resp = self.cmd(&cmd).await?;
+        Ok(resp
+            .get("scanning_db")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0))
     }
 
     pub async fn currentsong(&self) -> anyhow::Result<Option<Song>> {
@@ -784,11 +819,17 @@ async fn handle_change(
     events: &broadcast::Sender<MpdEvent>,
     snap: &watch::Sender<Snapshot>,
 ) {
-    match kind.trim() {
-        "database" => {
-            let _ = events.send(MpdEvent::DatabaseChanged);
-        }
-        "player" | "playlist" | "options" | "mixer" => {
+    let kind = kind.trim();
+    // `changed: database` fires both when a database update starts and when it
+    // finishes. The "is updating" flag lives in `status` (`updating_db`), so the
+    // finish is only observable by re-reading status: without a snapshot here the
+    // WebSocket never delivers the `updating` true→false transition and the UI's
+    // "Updating…" indicator stays stuck. Push one alongside the notice.
+    if kind == "database" {
+        let _ = events.send(MpdEvent::DatabaseChanged);
+    }
+    match kind {
+        "database" | "player" | "playlist" | "options" | "mixer" => {
             if let Some(s) = fetch_snapshot(cmd_tx).await {
                 let _ = snap.send(s.clone());
                 let _ = events.send(MpdEvent::Snapshot(Box::new(s)));

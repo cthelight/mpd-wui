@@ -1,7 +1,7 @@
 //! MPD text-protocol primitives: response parsing, item grouping, filter
 //! escaping, and binary (album-art) responses.
 
-use crate::types::{Browse, DirEntry, PlayState, Song, Status};
+use crate::types::{Browse, DbStats, DirEntry, PlayState, Song, Status};
 
 /// An MPD `ACK` error line: `ACK [code@index] message`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -324,6 +324,18 @@ fn status_time_total(v: &str) -> u32 {
         .unwrap_or(v)
         .parse()
         .unwrap_or(0)
+}
+
+/// Parse the `stats` command into a [`DbStats`].
+pub fn parse_stats(resp: &Response) -> DbStats {
+    let uint_of = |key: &str| resp.get(key).and_then(|v| v.parse().ok()).unwrap_or(0);
+    DbStats {
+        db_playtime: uint_of("db_playtime"),
+        songs: uint_of("songs"),
+        albums: uint_of("albums"),
+        artists: uint_of("artists"),
+        db_update: uint_of("db_update"),
+    }
 }
 
 /// Parse `currentsong` into an optional [`Song`] (None when the playlist is empty).

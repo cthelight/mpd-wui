@@ -999,3 +999,143 @@ async fn cache_is_cleared_on_database_change() {
     }
     assert!(state.cache.get_art("art:cover.jpg").is_none());
 }
+
+// -- database maintenance & cache clearing -----------------------------------
+
+#[tokio::test]
+async fn database_stats_returns_mock_values() {
+    let (router, _, mock) = app().await;
+    mock.set_stats(fields(&[
+        ("db_playtime", "300"),
+        ("songs", "10"),
+        ("albums", "3"),
+        ("artists", "2"),
+        ("db_update", "1700000000"),
+    ]))
+    .await;
+
+    let (status, _, body) = call(&router, get("/api/database/stats")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(value["db_playtime"], 300);
+    assert_eq!(value["songs"], 10);
+    assert_eq!(value["albums"], 3);
+    assert_eq!(value["artists"], 2);
+    assert_eq!(value["db_update"], 1700000000);
+}
+
+#[tokio::test]
+async fn database_update_returns_updating_and_records_path() {
+    let (router, _, mock) = app().await;
+
+    let (status, _, body) = call(
+        &router,
+        post_json("/api/database/update", &json!({"path": "/Band"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(as_json(&body)["updating"], 1);
+
+    // The leading slash must be stripped before reaching MPD.
+    assert_eq!(mock.update_paths().await, vec!["Band".to_string()]);
+}
+
+#[tokio::test]
+async fn database_update_without_path_scans_whole_database() {
+    let (router, _, mock) = app().await;
+
+    let (status, _, body) = call(&router, post_json("/api/database/update", &json!({}))).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(as_json(&body)["updating"], 1);
+
+    // No path: MPD gets a bare `update` (empty argument in the mock).
+    assert_eq!(mock.update_paths().await, vec![String::new()]);
+}
+
+#[tokio::test]
+async fn database_rescan_supported_returns_scanning() {
+    let initial = MockState {
+        commands: vec!["play".to_string(), "rescan".to_string()],
+        ..Default::default()
+    };
+    let (router, _, mock) = app_with(initial).await;
+
+    let (status, _, body) = call(
+        &router,
+        post_json("/api/database/rescan", &json!({"path": "/Band"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(as_json(&body)["scanning"], 1);
+    assert_eq!(mock.rescan_paths().await, vec!["Band".to_string()]);
+}
+
+/// The server reports capabilities but does not offer `rescan`: the request is
+/// a client error and no `rescan` command reaches the server.
+#[tokio::test]
+async fn database_rescan_unsupported_rejected() {
+    let initial = MockState {
+        commands: vec!["play".to_string(), "pause".to_string()],
+        ..Default::default()
+    };
+    let (router, _, mock) = app_with(initial).await;
+
+    let (status, _, body) = call(
+        &router,
+        post_json("/api/database/rescan", &json!({"path": "/Band"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        as_json(&body)["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("rescan is not supported")
+    );
+    assert!(mock.rescan_paths().await.is_empty());
+}
+
+/// `POST /api/cache/clear` must drop the album-art cache *and* invalidate the
+/// in-process library snapshot, forcing the next search to re-dump from MPD.
+#[tokio::test]
+async fn cache_clear_endpoint_drops_art_and_invalidates_library() {
+    let initial = MockState {
+        art: Some((vec![7, 7], "image/png".to_string())),
+        search: vec![fields(&[("file", "a/one.flac"), ("Title", "One")])],
+        ..Default::default()
+    };
+    let (router, state, mock) = app_with(initial).await;
+    let uri = "/api/albumart?uri=cover.jpg";
+
+    // Populate the album-art cache.
+    let (status, _, _) = call(&router, get(uri)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(state.cache.get_art("art:cover.jpg").is_some());
+
+    // Populate the library snapshot via a search (one `search` dump).
+    let (status, _, body) = call(&router, get("/api/search?q=one")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hit_files(&as_json(&body)), vec!["a/one.flac".to_string()]);
+    let dumps_after_load = mock.command_count("search").await;
+    assert!(dumps_after_load >= 1, "library must have dumped once");
+
+    // Clear both caches.
+    let (status, _, _) = call(&router, post_raw("/api/cache/clear", "")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The album-art cache must be empty.
+    assert!(
+        state.cache.get_art("art:cover.jpg").is_none(),
+        "cache/clear must drop the album-art cache"
+    );
+
+    // The library snapshot must be gone: a fresh search re-dumps the library
+    // (an extra `search` command) instead of serving the still-fresh copy.
+    let (status, _, body) = call(&router, get("/api/search?q=one")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hit_files(&as_json(&body)), vec!["a/one.flac".to_string()]);
+    assert!(
+        mock.command_count("search").await > dumps_after_load,
+        "cache/clear must invalidate the library snapshot"
+    );
+}

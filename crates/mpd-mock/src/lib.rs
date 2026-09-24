@@ -18,6 +18,14 @@ pub type FieldList = Vec<Field>;
 pub struct MockState {
     /// Fields for the `status` command.
     pub status: FieldList,
+    /// Fields for the `stats` command.
+    pub stats: FieldList,
+    /// Paths (or empty strings) passed to the `update` command.
+    pub update_paths: Vec<String>,
+    /// Paths (or empty strings) passed to the `rescan` command.
+    pub rescan_paths: Vec<String>,
+    /// How often each command name has been received.
+    pub command_counts: std::collections::HashMap<String, usize>,
     /// Fields for the current song (`currentsong`), or None for an empty playlist.
     pub currentsong: Option<FieldList>,
     /// Item groups for `playlistinfo`.
@@ -104,6 +112,28 @@ impl MockMpd {
 
     pub async fn set_status(&self, fields: FieldList) {
         self.state.lock().await.status = fields;
+    }
+
+    pub async fn set_stats(&self, fields: FieldList) {
+        self.state.lock().await.stats = fields;
+    }
+
+    pub async fn update_paths(&self) -> Vec<String> {
+        self.state.lock().await.update_paths.clone()
+    }
+
+    pub async fn rescan_paths(&self) -> Vec<String> {
+        self.state.lock().await.rescan_paths.clone()
+    }
+
+    pub async fn command_count(&self, command: &str) -> usize {
+        self.state
+            .lock()
+            .await
+            .command_counts
+            .get(command)
+            .copied()
+            .unwrap_or(0)
     }
 
     pub async fn set_currentsong(&self, fields: Option<FieldList>) {
@@ -256,7 +286,8 @@ async fn handle_cmd(
     };
 
     let delay = {
-        let st = state.lock().await;
+        let mut st = state.lock().await;
+        *st.command_counts.entry(name.to_string()).or_insert(0) += 1;
         if st.fail_commands.iter().any(|c| c == name) {
             write_all_chunked(w, b"ACK [5@1] simulated failure\n", chunk).await?;
             let _ = w.flush().await;
@@ -299,6 +330,23 @@ async fn handle_cmd(
                 write_fields(w, song, chunk).await?;
             }
             write_all_chunked(w, b"OK\n", chunk).await?;
+        }
+        "stats" => {
+            let st = state.lock().await;
+            write_fields(w, &st.stats, chunk).await?;
+            write_all_chunked(w, b"OK\n", chunk).await?;
+        }
+        "update" => {
+            let mut st = state.lock().await;
+            st.update_paths.push(unquote(rest).to_string());
+            set_field(&mut st.status, "updating_db", "1");
+            write_all_chunked(w, b"updating_db: 1\nOK\n", chunk).await?;
+        }
+        "rescan" => {
+            let mut st = state.lock().await;
+            st.rescan_paths.push(unquote(rest).to_string());
+            set_field(&mut st.status, "updating_db", "1");
+            write_all_chunked(w, b"scanning_db: 1\nOK\n", chunk).await?;
         }
         "playlistinfo" => {
             let st = state.lock().await;
@@ -568,6 +616,15 @@ async fn write_fields(
         write_all_chunked(w, format!("{k}: {v}\n").as_bytes(), chunk).await?;
     }
     Ok(())
+}
+
+/// Replace a `key: value` field in a field list, appending it if absent.
+fn set_field(fields: &mut FieldList, key: &str, value: &str) {
+    if let Some(entry) = fields.iter_mut().find(|(k, _)| k == key) {
+        entry.1 = value.to_string();
+    } else {
+        fields.push((key.to_string(), value.to_string()));
+    }
 }
 
 /// Parse an MPD positional spec (`N`, `a:b`, `a:` for "to the end") and

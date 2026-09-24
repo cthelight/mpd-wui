@@ -20,6 +20,8 @@ server.
   year
 - Add or play songs, albums, artists, genres, years, and folders into the
   queue
+- Settings view: database statistics, `update`/`rescan` (rescan only when the
+  server supports it), the MPD version, and a cache-clear action
 - Live status over WebSocket with locally interpolated progress
 - Browser back/forward support: every view change (tab, files level,
   collection drill, search) is a history entry, and any view reloads or
@@ -61,7 +63,9 @@ cargo build --release --locked -p mpd-wui
 `CACHE_TTL` controls how often the in-process library snapshot (used by
 `/api/search`) is rebuilt; a stale snapshot is served immediately and
 refreshed in the background until it is younger than the TTL. Album art is
-cached separately for a fixed hour.
+cached separately for a fixed hour. Both caches are dropped automatically when
+MPD reports a database change, and can be cleared manually from the Settings
+view (`POST /api/cache/clear`).
 
 The web server performs no authentication of its own and binds `0.0.0.0` by
 default. Anyone who can reach the port can control playback and the queue, so
@@ -79,6 +83,10 @@ use) and rely on `MPD_PASSWORD` for the MPD bridge itself.
 | GET    | `/api/search?q=&artist=&album=...&kinds=&limit=` | Fuzzy search: artists, albums, tracks; `kinds` is a comma list of which kinds to return (all by default) |
 | GET    | `/api/capabilities`                         | MPD capabilities                |
 | GET    | `/api/albumart?uri=`                        | Album art proxy                 |
+| GET    | `/api/database/stats`                       | Database statistics             |
+| POST   | `/api/database/update`                      | Update the database (`{path?}`) |
+| POST   | `/api/database/rescan`                      | Rescan the database (MPD ≥ 0.22, rejected otherwise) |
+| POST   | `/api/cache/clear`                          | Clear the album-art cache and library snapshot |
 | POST   | `/api/play`, `/api/pause`, `/api/stop`      | Transport controls (`play` accepts `{position?}` / `{id?}`, `clear: true` keeps only that song) |
 | POST   | `/api/next`, `/api/previous`                | Track navigation                |
 | POST   | `/api/seek`, `/api/volume`                  | Seek and volume                 |

@@ -6,6 +6,7 @@
 //
 // #nowplaying                            Now Playing
 // #queue                                 Queue
+// #settings                              Settings
 // #library                               Library, Artists (the default tab)
 // #library/<type>/<value>/…              Collection drill (≤ 3 frames)
 // #library/files/<segment>/…             Library files, path = segments joined
@@ -68,6 +69,8 @@ export function parseRoute(hash) {
       return { view: "nowplaying" };
     case "queue":
       return { view: "queue" };
+    case "settings":
+      return { view: "settings" };
     case "library": {
       let rest = segments.slice(1);
       if (rest[0] === "collections") rest = rest.slice(1); // legacy
@@ -107,6 +110,7 @@ export function parseRoute(hash) {
 export function routeToHash(route) {
   if (route.view === "nowplaying") return "#nowplaying";
   if (route.view === "queue") return "#queue";
+  if (route.view === "settings") return "#settings";
   if (route.mode === "search") return `#library/search?q=${encodeURIComponent(route.query)}`;
   if (route.mode === "browse") {
     const segments = (route.browsePath || "")

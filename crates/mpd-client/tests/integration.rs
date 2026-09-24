@@ -307,16 +307,45 @@ async fn idle_player_change_emits_snapshot() {
 
 #[tokio::test]
 async fn idle_database_change_emits_event() {
-    let server = MockMpd::start(MockState::default()).await;
+    // Start mid-update: `updating_db` is present, so the status reports
+    // `updating == true`.
+    let server = MockMpd::start(MockState {
+        status: fields(&[("state", "stop"), ("updating_db", "1")]),
+        ..Default::default()
+    })
+    .await;
     let client = MpdClient::connect(config_for(server.port())).await;
     let mut rx = client.events();
 
-    // Give the idle connection a moment to attach and enter its loop.
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // The command session primes exactly one snapshot at connect; drain it so
+    // the next snapshot is unambiguously the one triggered by the idle change.
+    let _ = wait_for_event(&mut rx, |e| matches!(e, MpdEvent::Reconnected)).await;
+    if let Some(MpdEvent::Snapshot(snap)) =
+        wait_for_event(&mut rx, |e| matches!(e, MpdEvent::Snapshot(_))).await
+    {
+        assert!(
+            snap.status.updating,
+            "primed snapshot reflects the in-progress update"
+        );
+    }
 
+    // The update finishes: MPD clears `updating_db` and fires `changed: database`.
+    server.set_status(fields(&[("state", "stop")])).await;
     server.set_next_idle_change("database").await;
+
     let ev = wait_for_event(&mut rx, |e| matches!(e, MpdEvent::DatabaseChanged)).await;
     assert!(matches!(ev, Some(MpdEvent::DatabaseChanged)));
+
+    // A fresh snapshot follows the database notice, carrying the cleared
+    // `updating` flag so the UI can drop its "Updating…" indicator.
+    let ev = wait_for_event(&mut rx, |e| matches!(e, MpdEvent::Snapshot(_))).await;
+    let MpdEvent::Snapshot(snap) = ev.expect("snapshot after database change") else {
+        panic!("expected a snapshot after the database change");
+    };
+    assert!(
+        !snap.status.updating,
+        "snapshot after completion must not be updating"
+    );
 }
 
 #[tokio::test]
@@ -617,6 +646,57 @@ async fn auth_failure_recovers_when_password_restored() {
         recovered,
         "session must recover once the password is restored"
     );
+}
+
+#[tokio::test]
+async fn stats_roundtrip() {
+    let server = MockMpd::start(MockState {
+        stats: fields(&[
+            ("db_playtime", "12345"),
+            ("songs", "100"),
+            ("albums", "10"),
+            ("artists", "5"),
+            ("db_update", "1700000000"),
+        ]),
+        ..Default::default()
+    })
+    .await;
+
+    let client = MpdClient::connect(config_for(server.port())).await;
+    let stats = client.stats().await.expect("stats");
+    assert_eq!(stats.db_playtime, 12345);
+    assert_eq!(stats.songs, 100);
+    assert_eq!(stats.albums, 10);
+    assert_eq!(stats.artists, 5);
+    assert_eq!(stats.db_update, 1_700_000_000);
+}
+
+#[tokio::test]
+async fn update_and_rescan_return_ids_and_mark_status() {
+    let server = MockMpd::start(MockState::default()).await;
+    let client = MpdClient::connect(config_for(server.port())).await;
+
+    let updating = client.update(Some("Album")).await.expect("update");
+    assert!(updating > 0);
+
+    let scanning = client.rescan(Some("/Album")).await.expect("rescan");
+    assert!(scanning > 0);
+
+    assert_eq!(server.update_paths().await, vec!["Album".to_string()]);
+    assert_eq!(server.rescan_paths().await, vec!["/Album".to_string()]);
+
+    let st = client.status().await.expect("status after update/rescan");
+    assert!(st.updating, "status must report the update as in progress");
+}
+
+#[tokio::test]
+async fn update_without_path_uses_full_database() {
+    let server = MockMpd::start(MockState::default()).await;
+    let client = MpdClient::connect(config_for(server.port())).await;
+
+    let updating = client.update(None).await.expect("full update");
+    assert!(updating > 0);
+    assert_eq!(server.update_paths().await, vec![String::new()]);
 }
 
 #[tokio::test]

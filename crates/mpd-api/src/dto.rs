@@ -1,6 +1,6 @@
 //! Request bodies for the JSON API.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Default)]
 pub struct PlayReq {
@@ -77,4 +77,20 @@ pub struct RemoveReq {
 pub struct MoveReq {
     pub id: u32,
     pub to: u32,
+}
+
+/// An optional directory to limit an `update`/`rescan` to.
+#[derive(Debug, Deserialize, Default)]
+pub struct DbPathReq {
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateResp {
+    pub updating: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RescanResp {
+    pub scanning: u32,
 }

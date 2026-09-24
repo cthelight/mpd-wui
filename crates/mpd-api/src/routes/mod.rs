@@ -1,6 +1,7 @@
 //! HTTP route handlers, grouped by concern.
 
 pub mod albumart;
+pub mod database;
 pub mod library;
 pub mod playback;
 pub mod queue;

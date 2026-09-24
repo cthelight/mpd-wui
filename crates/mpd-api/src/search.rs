@@ -404,8 +404,7 @@ impl LibraryIndex {
                 if count == 0 {
                     continue;
                 }
-                if let Some(score) =
-                    score_haystack(&pattern, &mut matcher, &mut buf, &artist.name)
+                if let Some(score) = score_haystack(&pattern, &mut matcher, &mut buf, &artist.name)
                 {
                     hits.push(SearchHit::Artist {
                         key: artist.key.to_string(),

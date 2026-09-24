@@ -133,6 +133,24 @@ pub struct Browse {
     pub playtime: Option<u32>,
 }
 
+/// Database statistics (the `stats` command).
+///
+/// Field names track MPD ≥ 0.23's `stats` reply: `db_playtime`, `songs`,
+/// `albums`, `artists`, and `db_update`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DbStats {
+    /// Total playtime of the database, in seconds (wire: `db_playtime`).
+    pub db_playtime: u64,
+    /// Number of songs in the database (wire: `songs`).
+    pub songs: u64,
+    /// Number of albums in the database (wire: `albums`).
+    pub albums: u64,
+    /// Number of artists in the database (wire: `artists`).
+    pub artists: u64,
+    /// Last time the database was updated, as a Unix timestamp (wire: `db_update`).
+    pub db_update: u64,
+}
+
 /// A point-in-time snapshot of the player, pushed over the WebSocket.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {

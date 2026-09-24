@@ -8,4 +8,6 @@ mod protocol;
 mod types;
 
 pub use client::{MpdClient, MpdConfig};
-pub use types::{Browse, Capabilities, DirEntry, MpdEvent, PlayState, Snapshot, Song, Status};
+pub use types::{
+    Browse, Capabilities, DbStats, DirEntry, MpdEvent, PlayState, Snapshot, Song, Status,
+};

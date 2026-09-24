@@ -67,6 +67,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/queue/move", post(routes::queue::move_))
         .route("/api/queue/shuffle", post(routes::queue::shuffle))
         .route("/api/albumart", get(routes::albumart::albumart))
+        .route("/api/database/update", post(routes::database::update))
+        .route("/api/database/rescan", post(routes::database::rescan))
+        .route("/api/database/stats", get(routes::database::stats))
+        .route("/api/cache/clear", post(routes::database::clear_cache))
         .route("/ws", get(ws::ws_handler))
         .with_state(state)
 }
