@@ -1139,3 +1139,231 @@ async fn cache_clear_endpoint_drops_art_and_invalidates_library() {
         "cache/clear must invalidate the library snapshot"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Audio outputs
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn outputs_endpoint_lists_outputs_of_partition() {
+    let (router, _state, mock) = app().await;
+    mock.set_outputs(vec![
+        fields(&[
+            ("outputid", "0"),
+            ("outputname", "PulseAudio"),
+            ("plugin", "pulse"),
+            ("outputenabled", "1"),
+        ]),
+        fields(&[
+            ("outputid", "1"),
+            ("outputname", "ALSA"),
+            ("plugin", "alsa"),
+            ("outputenabled", "0"),
+        ]),
+    ])
+    .await;
+
+    let (status, _, body) = call(&router, get("/api/outputs")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    let list = value.as_array().expect("array");
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0]["id"], 0);
+    assert_eq!(list[0]["name"], "PulseAudio");
+    assert_eq!(list[0]["plugin"], "pulse");
+    assert_eq!(list[0]["enabled"], true);
+    assert_eq!(list[1]["id"], 1);
+    assert_eq!(list[1]["enabled"], false);
+}
+
+#[tokio::test]
+async fn set_output_toggles_enablement() {
+    let (router, _state, mock) = app().await;
+    mock.set_outputs(vec![
+        fields(&[
+            ("outputid", "0"),
+            ("outputname", "PulseAudio"),
+            ("outputenabled", "1"),
+        ]),
+        fields(&[
+            ("outputid", "1"),
+            ("outputname", "ALSA"),
+            ("outputenabled", "1"),
+        ]),
+    ])
+    .await;
+
+    // Disable output 1.
+    let (status, _, _) = call(
+        &router,
+        post_json("/api/outputs", &json!({"id": 1, "enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        mock.output_enabled(1).await,
+        Some(false),
+        "output 1 must be disabled"
+    );
+    assert_eq!(
+        mock.output_enabled(0).await,
+        Some(true),
+        "output 0 must be untouched"
+    );
+
+    // Re-enable it.
+    let (status, _, _) = call(
+        &router,
+        post_json("/api/outputs", &json!({"id": 1, "enabled": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        mock.output_enabled(1).await,
+        Some(true),
+        "output 1 must be re-enabled"
+    );
+
+    // The reflected list must agree.
+    let (status, _, body) = call(&router, get("/api/outputs")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(value[1]["enabled"], true);
+}
+
+#[tokio::test]
+async fn set_output_unknown_id_rejected() {
+    let (router, _state, mock) = app().await;
+    mock.set_outputs(vec![fields(&[
+        ("outputid", "0"),
+        ("outputname", "PulseAudio"),
+        ("outputenabled", "1"),
+    ])])
+    .await;
+
+    let (status, _, body) = call(
+        &router,
+        post_json("/api/outputs", &json!({"id": 99, "enabled": true})),
+    )
+    .await;
+    // A real MPD answers an unknown output id with an ACK, which maps to 502.
+    assert_eq!(
+        status,
+        StatusCode::BAD_GATEWAY,
+        "unknown output id must surface the MPD error"
+    );
+    let value = as_json(&body);
+    assert!(
+        value["error"]
+            .as_str()
+            .expect("error message")
+            .contains("No such audio output")
+    );
+}
+
+#[tokio::test]
+async fn set_output_rejects_invalid_json() {
+    let (router, _state, _mock) = app().await;
+    let (status, _, _) = call(&router, post_raw("/api/outputs", "{not json")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------
+// Partitions
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn partitions_endpoint_lists_partitions_and_current() {
+    let initial = MockState {
+        partitions: vec!["default".into(), "living-room".into(), "office".into()],
+        current_partition: "living-room".into(),
+        ..Default::default()
+    };
+    let (router, _state, _mock) = app_with(initial).await;
+
+    let (status, _, body) = call(&router, get("/api/partitions")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(value["current"], "living-room");
+    let list: Vec<String> = value["partitions"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|v| v.as_str().expect("string").to_string())
+        .collect();
+    assert_eq!(
+        list,
+        [
+            "default".to_string(),
+            "living-room".to_string(),
+            "office".to_string()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn set_partition_switches_current_partition() {
+    let initial = MockState {
+        partitions: vec!["default".into(), "office".into()],
+        ..Default::default()
+    };
+    let (router, _state, mock) = app_with(initial).await;
+
+    let (status, _, _) = call(
+        &router,
+        post_json("/api/partitions", &json!({"name": "office"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(mock.current_partition().await, "office");
+
+    // The next `status` must report the new partition.
+    let (status, _, body) = call(&router, get("/api/partitions")).await;
+    assert_eq!(status, StatusCode::OK);
+    let value = as_json(&body);
+    assert_eq!(value["current"], "office");
+}
+
+#[tokio::test]
+async fn set_partition_unknown_name_rejected() {
+    let initial = MockState {
+        partitions: vec!["default".into()],
+        ..Default::default()
+    };
+    let (router, _state, mock) = app_with(initial).await;
+
+    let (status, _, body) = call(
+        &router,
+        post_json("/api/partitions", &json!({"name": "nope"})),
+    )
+    .await;
+    // A real MPD answers an unknown partition with an ACK, which maps to 502.
+    assert_eq!(
+        status,
+        StatusCode::BAD_GATEWAY,
+        "unknown partition must surface the MPD error"
+    );
+    let value = as_json(&body);
+    assert!(
+        value["error"]
+            .as_str()
+            .expect("error message")
+            .contains("partition does not exist")
+    );
+    assert_eq!(
+        mock.current_partition().await,
+        "default",
+        "failed switch must not change state"
+    );
+}
+
+#[tokio::test]
+async fn set_partition_empty_name_rejected() {
+    let (router, _state, _mock) = app().await;
+    let (status, _, _) = call(
+        &router,
+        post_json("/api/partitions", &json!({"name": "   "})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

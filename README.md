@@ -87,6 +87,10 @@ use) and rely on `MPD_PASSWORD` for the MPD bridge itself.
 | POST   | `/api/database/update`                      | Update the database (`{path?}`) |
 | POST   | `/api/database/rescan`                      | Rescan the database (MPD ≥ 0.22, rejected otherwise) |
 | POST   | `/api/cache/clear`                          | Clear the album-art cache and library snapshot |
+| GET    | `/api/outputs`                              | Audio outputs of the current partition        |
+| POST   | `/api/outputs`                              | Enable/disable an output (`{id, enabled}`; needs MPD admin permission) |
+| GET    | `/api/partitions`                           | Partition list and current partition          |
+| POST   | `/api/partitions`                           | Switch to a partition (`{name}`; moves the whole UI) |
 | POST   | `/api/play`, `/api/pause`, `/api/stop`      | Transport controls (`play` accepts `{position?}` / `{id?}`, `clear: true` keeps only that song) |
 | POST   | `/api/next`, `/api/previous`                | Track navigation                |
 | POST   | `/api/seek`, `/api/volume`                  | Seek and volume                 |

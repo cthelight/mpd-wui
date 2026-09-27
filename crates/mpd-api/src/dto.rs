@@ -94,3 +94,23 @@ pub struct UpdateResp {
 pub struct RescanResp {
     pub scanning: u32,
 }
+
+/// Enable or disable an audio output.
+#[derive(Debug, Deserialize)]
+pub struct OutputReq {
+    pub id: u32,
+    pub enabled: bool,
+}
+
+/// Switch the client to a named partition.
+#[derive(Debug, Deserialize)]
+pub struct PartitionReq {
+    pub name: String,
+}
+
+/// The partition list plus the client's current partition.
+#[derive(Debug, Serialize)]
+pub struct PartitionsResp {
+    pub current: String,
+    pub partitions: Vec<String>,
+}

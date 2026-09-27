@@ -1,7 +1,7 @@
 //! MPD text-protocol primitives: response parsing, item grouping, filter
 //! escaping, and binary (album-art) responses.
 
-use crate::types::{Browse, DbStats, DirEntry, PlayState, Song, Status};
+use crate::types::{AudioOutput, Browse, DbStats, DirEntry, PlayState, Song, Status};
 
 /// An MPD `ACK` error line: `ACK [code@index] message`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -313,6 +313,8 @@ pub fn parse_status(resp: &Response) -> Status {
         // The current song's playlist position; MPD omits it when stopped.
         song: resp.get("song").and_then(|v| v.parse().ok()),
         updating,
+        // MPD ≥ 0.21 always reports the client's current partition.
+        partition: resp.get("partition").unwrap_or("").to_string(),
     }
 }
 
@@ -336,6 +338,39 @@ pub fn parse_stats(resp: &Response) -> DbStats {
         artists: uint_of("artists"),
         db_update: uint_of("db_update"),
     }
+}
+
+/// Parse `outputs` into the list of audio outputs of the current partition.
+///
+/// MPD replies with one item group per output: `outputid` starts the group,
+/// followed by `outputname`, an optional `plugin` and `outputenabled`
+/// (`1`/`0`). Output ids may change between MPD executions, so callers must
+/// re-fetch the list before acting on an id.
+pub fn parse_outputs(resp: &Response) -> Vec<AudioOutput> {
+    let (items, _flat) = group_items(&resp.fields, &["outputid"], &[]);
+    items
+        .into_iter()
+        .map(|group| {
+            AudioOutput {
+                id: opt_str(&group, "outputid")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+                name: opt_str(&group, "outputname").unwrap_or_default(),
+                plugin: opt_str(&group, "plugin"),
+                // The wire field is `outputenabled`, not `enabled`.
+                enabled: opt_str(&group, "outputenabled").as_deref() == Some("1"),
+            }
+        })
+        .collect()
+}
+
+/// Parse `listpartitions` into the partition names (one `partition: name`
+/// line per partition).
+pub fn parse_partitions(resp: &Response) -> Vec<String> {
+    resp.get_all("partition")
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Parse `currentsong` into an optional [`Song`] (None when the playlist is empty).
@@ -520,6 +555,10 @@ mod tests {
         assert_eq!(s.playlist_version, 843);
         assert!(s.consume);
         assert_eq!(s.song, Some(2), "song must be the current playlist index");
+        assert_eq!(
+            s.partition, "default",
+            "status must carry the current partition"
+        );
     }
 
     #[test]
@@ -750,5 +789,69 @@ mod tests {
         let (items, flat) = group_items(&fields, &[], &[]);
         assert!(items.is_empty());
         assert_eq!(flat.len(), 2);
+    }
+
+    /// A realistic `outputs` response: one item group per output, `outputid`
+    /// starts each group, `attribute` lines belong to their group, and
+    /// disabled outputs carry `outputenabled: 0`.
+    #[test]
+    fn parse_outputs_groups_per_output() {
+        let raw = concat!(
+            "outputid: 0\n",
+            "outputname: PulseAudio\n",
+            "plugin: pulse\n",
+            "outputenabled: 1\n",
+            "attribute: name=PulseAudio\n",
+            "outputid: 1\n",
+            "outputname: ALSA\n",
+            "plugin: alsa\n",
+            "outputenabled: 0\n",
+            "OK\n",
+        );
+        let outputs = parse_outputs(&parse_text(raw));
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].id, 0);
+        assert_eq!(outputs[0].name, "PulseAudio");
+        assert_eq!(outputs[0].plugin.as_deref(), Some("pulse"));
+        assert!(outputs[0].enabled);
+        assert_eq!(outputs[1].id, 1);
+        assert_eq!(outputs[1].name, "ALSA");
+        assert!(!outputs[1].enabled, "outputenabled: 0 must map to disabled");
+    }
+
+    #[test]
+    fn parse_outputs_without_plugin_or_attributes() {
+        let raw = "outputid: 0\noutputname: foo\noutputenabled: 1\nOK\n";
+        let outputs = parse_outputs(&parse_text(raw));
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].id, 0);
+        assert_eq!(outputs[0].name, "foo");
+        assert!(outputs[0].plugin.is_none());
+        assert!(outputs[0].enabled);
+    }
+
+    #[test]
+    fn parse_outputs_empty_when_no_outputs() {
+        let outputs = parse_outputs(&parse_text("OK\n"));
+        assert!(outputs.is_empty());
+    }
+
+    #[test]
+    fn parse_partitions_lists_names_in_order() {
+        let raw = "partition: default\npartition: living-room\npartition: office\nOK\n";
+        assert_eq!(
+            parse_partitions(&parse_text(raw)),
+            vec![
+                "default".to_string(),
+                "living-room".to_string(),
+                "office".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_partitions_empty_when_single_partition_unlisted() {
+        // A server without partition support (or an empty reply) yields none.
+        assert!(parse_partitions(&parse_text("OK\n")).is_empty());
     }
 }

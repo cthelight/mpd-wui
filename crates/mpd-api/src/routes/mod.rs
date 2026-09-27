@@ -6,6 +6,7 @@ pub mod library;
 pub mod playback;
 pub mod queue;
 pub mod status;
+pub mod system;
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;

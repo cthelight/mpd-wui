@@ -71,6 +71,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/database/rescan", post(routes::database::rescan))
         .route("/api/database/stats", get(routes::database::stats))
         .route("/api/cache/clear", post(routes::database::clear_cache))
+        .route(
+            "/api/outputs",
+            get(routes::system::outputs).post(routes::system::set_output),
+        )
+        .route(
+            "/api/partitions",
+            get(routes::system::partitions).post(routes::system::set_partition),
+        )
         .route("/ws", get(ws::ws_handler))
         .with_state(state)
 }

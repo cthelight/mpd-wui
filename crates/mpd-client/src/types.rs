@@ -46,6 +46,9 @@ pub struct Status {
     pub song: Option<u32>,
     /// True while the database is updating.
     pub updating: bool,
+    /// Name of the partition this client is connected to (MPD ≥ 0.21; empty
+    /// if the server does not report it).
+    pub partition: String,
 }
 
 /// A song / track, whether from the database, the playlist or `currentsong`.
@@ -156,6 +159,19 @@ pub struct DbStats {
 pub struct Snapshot {
     pub status: Status,
     pub song: Option<Song>,
+}
+
+/// One audio output as reported by the `outputs` command.
+///
+/// Output ids may change between MPD executions, so they must never be cached
+/// or persisted — always re-fetch the list before toggling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioOutput {
+    pub id: u32,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    pub enabled: bool,
 }
 
 /// Events emitted by the client for the API / WebSocket layer to consume.

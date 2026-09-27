@@ -10,9 +10,10 @@ use tokio::sync::{RwLock, broadcast, mpsc, oneshot, watch};
 
 use crate::protocol::{
     Response, build_search_filters, parse_art, parse_currentsong, parse_list, parse_lsinfo,
-    parse_song_list, parse_stats, parse_status, parse_text, quote_arg, sniff_mime,
+    parse_outputs, parse_partitions, parse_song_list, parse_stats, parse_status, parse_text,
+    quote_arg, sniff_mime,
 };
-use crate::types::{Browse, Capabilities, DbStats, MpdEvent, Snapshot, Song, Status};
+use crate::types::{AudioOutput, Browse, Capabilities, DbStats, MpdEvent, Snapshot, Song, Status};
 
 /// Connection settings for an MPD server.
 #[derive(Debug, Clone)]
@@ -233,6 +234,44 @@ impl MpdClient {
     /// is rejected with "Incorrect number of filter arguments".
     pub async fn playlist_count(&self) -> anyhow::Result<u32> {
         Ok(self.status().await?.songs)
+    }
+
+    /// All audio outputs of the *current* partition (`outputs`).
+    ///
+    /// MPD only lists the outputs of the partition this client is connected
+    /// to, and the ids may change between MPD executions — always re-fetch
+    /// before acting on an id.
+    pub async fn outputs(&self) -> anyhow::Result<Vec<AudioOutput>> {
+        Ok(parse_outputs(&self.cmd("outputs").await?))
+    }
+
+    /// Enable or disable an audio output by id.
+    ///
+    /// `enableoutput`/`disableoutput` require admin permission for the
+    /// connected MPD user; a permission-less user gets an ACK error.
+    pub async fn set_output(&self, id: u32, enabled: bool) -> anyhow::Result<()> {
+        let cmd = if enabled {
+            format!("enableoutput {id}")
+        } else {
+            format!("disableoutput {id}")
+        };
+        self.cmd(&cmd).await.map(|_| ())
+    }
+
+    /// All partition names (`listpartitions`, MPD ≥ 0.21).
+    pub async fn list_partitions(&self) -> anyhow::Result<Vec<String>> {
+        Ok(parse_partitions(&self.cmd("listpartitions").await?))
+    }
+
+    /// Switch this client to another partition (`partition NAME`).
+    ///
+    /// The partition is per-connection: switching moves this client's whole
+    /// view (queue, player, outputs) to the named partition and errors when
+    /// the partition does not exist.
+    pub async fn set_partition(&self, name: &str) -> anyhow::Result<()> {
+        self.cmd(&format!("partition {}", quote_arg(name)))
+            .await
+            .map(|_| ())
     }
 
     // -- playback -----------------------------------------------------------
@@ -786,7 +825,10 @@ async fn idle_session(
 
     // Connected; keep issuing idle until the connection dies.
     loop {
-        let idle_cmd = "idle player mixer options playlist database\n";
+        // `output` and `partition` (MPD ≥ 0.21) notify output/partition
+        // changes made by other clients, which the status snapshot alone
+        // would not surface.
+        let idle_cmd = "idle player mixer options playlist database output partition\n";
         if w.write_all(idle_cmd.as_bytes()).await.is_err() || w.flush().await.is_err() {
             return true;
         }
@@ -829,7 +871,7 @@ async fn handle_change(
         let _ = events.send(MpdEvent::DatabaseChanged);
     }
     match kind {
-        "database" | "player" | "playlist" | "options" | "mixer" => {
+        "database" | "player" | "playlist" | "options" | "mixer" | "output" | "partition" => {
             if let Some(s) = fetch_snapshot(cmd_tx).await {
                 let _ = snap.send(s.clone());
                 let _ = events.send(MpdEvent::Snapshot(Box::new(s)));

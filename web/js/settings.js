@@ -1,4 +1,5 @@
-// Settings view: server info, database maintenance and local cache controls.
+// Settings view: server info, database maintenance, local cache, audio outputs
+// and partitions.
 import { get, post } from "./api.js";
 import { icon } from "./icons.js";
 import { escapeHtml, toast } from "./util.js";
@@ -63,6 +64,14 @@ export function mountSettings(container) {
             <button type="button" data-act="rescan">${icon("refresh", 16)} Rescan</button>
           </div>
         </section>
+        <section class="settings-card" aria-labelledby="settings-outputs">
+          <h2 id="settings-outputs">${icon("volume", 18)} Outputs</h2>
+          <div data-outputs>Loading…</div>
+        </section>
+        <section class="settings-card" aria-labelledby="settings-partitions">
+          <h2 id="settings-partitions">${icon("music", 18)} Partitions</h2>
+          <div data-partitions>Loading…</div>
+        </section>
         <section class="settings-card" aria-labelledby="settings-cache">
           <h2 id="settings-cache">${icon("trash", 18)} Cache</h2>
           <p>Clear cached album art and the in-process library snapshot.</p>
@@ -77,6 +86,8 @@ export function mountSettings(container) {
   const serverStatus = container.querySelector("[data-server-status]");
   const statsEl = container.querySelector("[data-stats]");
   const dbStatus = container.querySelector("[data-db-status]");
+  const outputsEl = container.querySelector("[data-outputs]");
+  const partitionsEl = container.querySelector("[data-partitions]");
   const buttons = {
     update: container.querySelector('[data-act="update"]'),
     rescan: container.querySelector('[data-act="rescan"]'),
@@ -88,8 +99,26 @@ export function mountSettings(container) {
   let pending = 0;
   let pollTimer = null;
 
+  // System state (outputs + partitions) is scoped to the client's current
+  // partition, so we only re-fetch when the partition changes or a load
+  // failed. Output ids are not stable across MPD runs, so we never cache them
+  // across a reload — every render comes from a fresh `outputs` response.
+  let outputs = [];
+  let partitions = { current: "", partitions: [] };
+  let loadedPartition = null;
+  let systemLoaded = false;
+  let outputsLoading = false;
+  let partitionsLoading = false;
+
   function rescanSupported() {
     return capabilities?.commands?.includes("rescan") ?? false;
+  }
+
+  // Optimistic: if MPD reports no command list we assume support rather than
+  // hiding features on older servers that omit `commands` entirely.
+  function hasCommand(name) {
+    const commands = capabilities?.commands;
+    return commands?.length ? commands.includes(name) : true;
   }
 
   function refreshButtons() {
@@ -121,6 +150,9 @@ export function mountSettings(container) {
       capabilities = null;
       serverStatus.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
     }
+    // Capability gating affects the output toggles; re-render if we already
+    // have output data.
+    if (systemLoaded) renderOutputs();
     refreshButtons();
   }
 
@@ -134,9 +166,101 @@ export function mountSettings(container) {
     }
   }
 
+  async function loadOutputs() {
+    if (outputsLoading) return;
+    outputsLoading = true;
+    outputsEl.innerHTML = `<div class="empty">Loading…</div>`;
+    try {
+      outputs = (await get("/outputs")) || [];
+      systemLoaded = true;
+      renderOutputs();
+    } catch (err) {
+      outputsEl.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+    } finally {
+      outputsLoading = false;
+    }
+  }
+
+  function renderOutputs() {
+    const canControl = hasCommand("enableoutput");
+    if (!outputs.length) {
+      outputsEl.innerHTML = `<div class="empty">No audio outputs configured.</div>`;
+      return;
+    }
+    const rows = outputs
+      .map((output) => `
+        <div class="output-row">
+          <span class="output-name" title="${escapeHtml(output.plugin ? `${output.name} (${output.plugin})` : output.name)}">
+            ${escapeHtml(output.name)}
+          </span>
+          ${output.plugin ? `<span class="output-plugin">${escapeHtml(output.plugin)}</span>` : ""}
+          <input
+            class="toggle"
+            type="checkbox"
+            role="switch"
+            data-output-id="${output.id}"
+            aria-label="${output.enabled ? "Disable" : "Enable"} ${escapeHtml(output.name)}"
+            ${output.enabled ? "checked" : ""}
+            ${canControl ? "" : "disabled"}
+          />
+        </div>
+      `)
+      .join("");
+    outputsEl.innerHTML = `
+      <div class="output-list">${rows}</div>
+      ${canControl ? "" : '<p class="card-hint">Switching outputs requires admin permission.</p>'}
+    `;
+  }
+
+  async function loadPartitions() {
+    if (partitionsLoading) return;
+    partitionsLoading = true;
+    partitionsEl.innerHTML = `<div class="empty">Loading…</div>`;
+    try {
+      partitions = await get("/partitions");
+      loadedPartition = partitions.current;
+      systemLoaded = true;
+      renderPartitions();
+    } catch (err) {
+      partitionsEl.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+    } finally {
+      partitionsLoading = false;
+    }
+  }
+
+  function renderPartitions() {
+    const list = partitions.partitions || [];
+    if (list.length <= 1) {
+      partitionsEl.innerHTML = `<div class="empty">This server runs a single partition; there is nothing to switch.</div>`;
+      return;
+    }
+    const rows = list
+      .map((name) => {
+        const active = name === partitions.current;
+        return `
+        <button
+          type="button"
+          class="partition-row"
+          data-partition-name="${escapeHtml(name)}"
+          ${active ? 'aria-current="true" disabled' : ""}
+        >
+          <span class="partition-name">${escapeHtml(name)}</span>
+          ${active ? '<span class="partition-badge">current</span>' : ""}
+        </button>
+      `;
+      })
+      .join("");
+    partitionsEl.innerHTML = `
+      <div class="partition-list">${rows}</div>
+      <p class="card-hint">Switching moves the whole UI — queue, player and outputs — to that partition.</p>
+    `;
+  }
+
   function refresh() {
     loadCapabilities();
     loadStats();
+    loadOutputs();
+    loadPartitions();
   }
 
   // The WebSocket only pushes a snapshot when MPD reports a change, and a
@@ -152,6 +276,13 @@ export function mountSettings(container) {
       stopPolling();
     } else if (updating) {
       startPolling();
+    }
+    // A partition change — from this client or another — invalidates both
+    // system cards, whose lists are scoped to the client's current partition.
+    const partition = snapshot?.status?.partition;
+    if (systemLoaded && partition && partition !== loadedPartition) {
+      loadOutputs();
+      loadPartitions();
     }
     refreshButtons();
   }
@@ -196,6 +327,46 @@ export function mountSettings(container) {
   buttons.clearCache.addEventListener("click", () =>
     run(buttons.clearCache, "/cache/clear", "Cache cleared")
   );
+
+  // Output toggles: delegate to the (re-rendered) list container.
+  outputsEl.addEventListener("change", async (event) => {
+    const checkbox = event.target.closest(".toggle");
+    if (!checkbox) return;
+    const id = Number(checkbox.dataset.outputId);
+    const enabled = checkbox.checked;
+    const output = outputs.find((item) => item.id === id);
+    checkbox.disabled = true;
+    try {
+      await post("/outputs", { id, enabled });
+      if (output) output.enabled = enabled;
+      toast(`${enabled ? "Enabled" : "Disabled"} output "${output?.name || id}"`);
+      renderOutputs();
+    } catch (err) {
+      toast(err?.message || String(err));
+      checkbox.checked = !enabled;
+      checkbox.disabled = false;
+    }
+  });
+
+  // Partition switching: a successful switch changes what every other card
+  // shows (stats, outputs, capabilities are all partition-scoped), so reload
+  // the whole settings view.
+  partitionsEl.addEventListener("click", async (event) => {
+    const button = event.target.closest(".partition-row");
+    if (!button || button.disabled) return;
+    const name = button.dataset.partitionName;
+    button.disabled = true;
+    try {
+      await post("/partitions", { name });
+      toast(`Switched to partition "${name}"`);
+      loadedPartition = null;
+      systemLoaded = false;
+      refresh();
+    } catch (err) {
+      toast(err?.message || String(err));
+      button.disabled = false;
+    }
+  });
 
   refresh();
 

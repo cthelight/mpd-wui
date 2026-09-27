@@ -14,7 +14,7 @@ pub type Field = (String, String);
 pub type FieldList = Vec<Field>;
 
 /// Configurable server state shared across all mock connections.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MockState {
     /// Fields for the `status` command.
     pub status: FieldList,
@@ -66,6 +66,45 @@ pub struct MockState {
     /// An unexpected line (neither `changed:` nor `OK`) to emit on the *next*
     /// `idle` reply, to verify the client tolerates stray server output.
     pub next_idle_stray: String,
+    /// Item groups for `outputs` (each starts with `outputid`).
+    pub outputs: Vec<FieldList>,
+    /// Partition names reported by `listpartitions`.
+    pub partitions: Vec<String>,
+    /// The client's current partition, reported in `status`.
+    pub current_partition: String,
+}
+
+impl Default for MockState {
+    fn default() -> Self {
+        Self {
+            status: Vec::new(),
+            stats: Vec::new(),
+            update_paths: Vec::new(),
+            rescan_paths: Vec::new(),
+            command_counts: std::collections::HashMap::new(),
+            currentsong: None,
+            playlist: Vec::new(),
+            lsinfo: Vec::new(),
+            list: Vec::new(),
+            search: Vec::new(),
+            art: None,
+            next_idle_change: String::new(),
+            commands: Vec::new(),
+            not_commands: Vec::new(),
+            password: None,
+            connection_timeout: None,
+            next_id: 0,
+            fail_commands: Vec::new(),
+            stall_commands: Vec::new(),
+            command_delays: std::collections::HashMap::new(),
+            write_chunk_size: 0,
+            next_idle_stray: String::new(),
+            outputs: Vec::new(),
+            // A plain MPD instance runs its default partition.
+            partitions: vec!["default".to_string()],
+            current_partition: "default".to_string(),
+        }
+    }
 }
 
 /// A running mock MPD server bound to an ephemeral localhost port.
@@ -203,6 +242,47 @@ impl MockMpd {
     pub async fn set_next_idle_stray(&self, line: &str) {
         self.state.lock().await.next_idle_stray = line.to_string();
     }
+
+    pub async fn set_outputs(&self, items: Vec<FieldList>) {
+        self.state.lock().await.outputs = items;
+    }
+
+    /// Set the partition list; if the current partition is no longer in the
+    /// list it falls back to the first one (a real MPD would error, but the
+    /// mock keeps its state consistent for follow-up commands).
+    pub async fn set_partitions(&self, names: Vec<String>) {
+        let mut st = self.state.lock().await;
+        st.partitions = names;
+        if !st.partitions.iter().any(|p| p == &st.current_partition) {
+            st.current_partition = st
+                .partitions
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "default".to_string());
+        }
+    }
+
+    pub async fn current_partition(&self) -> String {
+        self.state.lock().await.current_partition.clone()
+    }
+
+    /// The `outputenabled` value for an output id, if present (test helper).
+    pub async fn output_enabled(&self, id: u32) -> Option<bool> {
+        let st = self.state.lock().await;
+        st.outputs
+            .iter()
+            .find(|group| {
+                group
+                    .iter()
+                    .any(|(k, v)| k == "outputid" && v == &id.to_string())
+            })
+            .and_then(|group| {
+                group
+                    .iter()
+                    .find(|(k, _)| k == "outputenabled")
+                    .map(|(_, v)| v == "1")
+            })
+    }
 }
 
 impl Drop for MockMpd {
@@ -322,6 +402,11 @@ async fn handle_cmd(
                 let n = st.playlist.len();
                 write_all_chunked(w, format!("playlistlength: {n}\n").as_bytes(), chunk).await?;
             }
+            // Real MPD (≥ 0.21) always reports the client's current partition.
+            if !st.status.iter().any(|(k, _)| k == "partition") {
+                let p = st.current_partition.clone();
+                write_all_chunked(w, format!("partition: {p}\n").as_bytes(), chunk).await?;
+            }
             write_all_chunked(w, b"OK\n", chunk).await?;
         }
         "currentsong" => {
@@ -335,6 +420,67 @@ async fn handle_cmd(
             let st = state.lock().await;
             write_fields(w, &st.stats, chunk).await?;
             write_all_chunked(w, b"OK\n", chunk).await?;
+        }
+        "outputs" => {
+            let st = state.lock().await;
+            for item in &st.outputs {
+                write_fields(w, item, chunk).await?;
+            }
+            write_all_chunked(w, b"OK\n", chunk).await?;
+        }
+        // Mirrors MPD's `handle_enableoutput`/`handle_disableoutput`/
+        // `handle_toggleoutput`: the id must name an existing output, else
+        // `ACK [2@..] No such audio output`.
+        "enableoutput" | "disableoutput" | "toggleoutput" => {
+            let mut st = state.lock().await;
+            let id = rest.trim().parse::<u32>().ok();
+            let group = id.and_then(|id| {
+                st.outputs.iter_mut().find(|g| {
+                    g.iter()
+                        .any(|(k, v)| k == "outputid" && v == &id.to_string())
+                })
+            });
+            match group {
+                None => {
+                    let ack = format!("ACK [2@0] {{{name}}} No such audio output\n");
+                    write_all_chunked(w, ack.as_bytes(), chunk).await?;
+                }
+                Some(group) => {
+                    let next = match name {
+                        "enableoutput" => "1",
+                        "disableoutput" => "0",
+                        _ => {
+                            let cur = group
+                                .iter()
+                                .find(|(k, _)| k == "outputenabled")
+                                .map(|(_, v)| v.as_str())
+                                .unwrap_or("1");
+                            if cur == "1" { "0" } else { "1" }
+                        }
+                    };
+                    set_field(group, "outputenabled", next);
+                    write_all_chunked(w, b"OK\n", chunk).await?;
+                }
+            }
+        }
+        "listpartitions" => {
+            let st = state.lock().await;
+            for p in &st.partitions {
+                write_all_chunked(w, format!("partition: {p}\n").as_bytes(), chunk).await?;
+            }
+            write_all_chunked(w, b"OK\n", chunk).await?;
+        }
+        // Mirrors MPD's `handle_partition`: an unknown name is an error.
+        "partition" => {
+            let mut st = state.lock().await;
+            let target = unquote(rest);
+            if st.partitions.iter().any(|p| p == target) {
+                st.current_partition = target.to_string();
+                write_all_chunked(w, b"OK\n", chunk).await?;
+            } else {
+                let ack = "ACK [2@0] {partition} partition does not exist\n";
+                write_all_chunked(w, ack.as_bytes(), chunk).await?;
+            }
         }
         "update" => {
             let mut st = state.lock().await;
